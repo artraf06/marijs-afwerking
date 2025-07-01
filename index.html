@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Marijs Afwerking</title>
+
+  <!-- Favicon + PWA -->
+  <link rel="icon" type="image/png" href="logo-192.png" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#1e1e1e" />
+
+  <!-- CSS + PDF + Firebase -->
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+
+<!-- 🔍 Lightbox -->
+<div id="lightbox" class="lightbox hidden">
+  <span class="close-btn" onclick="closeLightbox()">&times;</span>
+  <span class="nav-arrow left-arrow" onclick="navigateLightbox(-1)">&#10094;</span>
+  <span class="nav-arrow right-arrow" onclick="navigateLightbox(1)">&#10095;</span>
+
+  <!-- Obrazek -->
+  <img id="lightboxImg" />
+
+  <!-- Wideo -->
+  <video id="lightboxVideo" controls></video>
+
+  <!-- Tekst (omschrijving, materialen,extra werk) -->
+  <div id="lightboxText" class="lightbox-text">
+    <div id="lightboxTextContent"></div>
+
+    <!-- Edytowalne pole i przycisk zapisu -->
+    <textarea id="lightboxTextarea" class="hidden"></textarea>
+    <button id="saveLightboxTextBtn" class="hidden">💾 Opslaan</button>
+  </div>
+</div> 
+<!-- 🔔 Powiadomienie o aktualizacji -->
+<div id="updateNotification" class="update-banner hidden">
+  Nieuwe versie geladen. Pagina wordt herladen...
+</div> 
+
+<!-- 🔵 Nagłówek -->
+<header class="header">
+  <img src="logo-192.png" class="logo" alt="Logo" />
+  <div class="header-title">Marijs Afwerking</div>
+  <div class="header-right">
+    <div id="datetime" class="datetime-display"></div>
+    <div id="logoutSection" class="hidden">
+      <span id="welcomeUser"></span>
+      <button id="logoutBtn">Uitloggen</button>
+    </div>
+  </div>
+</header>
+
+<!-- 🔐 Sekcja logowania -->
+<div class="container">
+  <section id="loginSection">
+    <h2>Inloggen</h2>
+    <form id="loginForm">
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.6 0-10.8 1.8-10.8 5.4v2.4h21.6v-2.4c0-3.6-7.2-5.4-10.8-5.4z"/>
+        </svg>
+        Gebruikersnaam:
+      </label>
+      <input id="username" required />
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M12 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm6-10V6a6 6 0 0 0-12 0v1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm-8-1a4 4 0 0 1 8 0v1h-8V6z"/>
+        </svg>
+        Wachtwoord:
+      </label>
+      <input id="password" type="password" required />
+      <button type="submit">inloggen</button>
+    </form>
+  </section> 
+<section id="mainContent" class="hidden">
+    <h2>Nieuw Project</h2>
+    <form id="projectForm">
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/>
+        </svg>
+        Projectnaam:
+      </label>
+      <input id="projectName" required />
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M3 6h18v2H3zM3 12h18v2H3zM3 18h18v2H3z"/>
+        </svg>
+        Omschrijving:
+      </label>
+      <input id="omschrijving" />
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M12 2C8.1 2 5 5.1 5 9c0 4.6 7 13 7 13s7-8.4 7-13c0-3.9-3.1-7-7-7zm0 9.5c-1.4 0-2.5-1.1-2.5-2.5S10.6 6.5 12 6.5s2.5 1.1 2.5 2.5S13.4 11.5 12 11.5z"/>
+        </svg>
+        Locatie:
+      </label>
+      <input id="locatie" required />
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M12 8V4l8 8-8 8v-4H4V8z"/>
+        </svg>
+        Uren:
+      </label>
+      <input id="uren" />
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M19 3H5c-1.1 0-2 .9-2 2v14l4-4H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>
+        </svg>
+        Materialen:
+      </label>
+      <input id="materialen" />
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M13 12h7v2h-7v7h-2v-7H4v-2h7V5h2z"/>
+        </svg>
+        Extra werk:
+      </label>
+      <input id="extraWerk" />
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M16 11c1.7 0 3-1.3 3-3S17.7 5 16 5s-3 1.3-3 3 1.3 3 3 3zm-8 0c1.7 0 3-1.3 3-3S9.7 5 8 5 5 6.3 5 8s1.3 3 3 3zm0 2c-2 0-6 1-6 3v3h12v-3c0-2-4-3-6-3zm8 0c-.3 0-.6 0-.9.1.6.6.9 1.3.9 2.1v2.8l6 1.1V16c0-2-4-3-6-3z"/>
+        </svg>
+        Werknemers:
+      </label>
+      <div id="werknemerCheckboxes" class="checkbox-group"></div>
+
+      <label class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M5 3h14a2 2 0 0 1 2 2v14l-4-4H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>
+        </svg>
+        Media:
+      </label>
+      <input id="media" type="file" multiple />
+
+      <button type="submit">Project opslaan</button>
+    </form>
+    <!-- 📆 Mijn Weekbrief Przycisk -->
+<div class="card">
+  <button id="openWeekbriefBtn">📆 Mijn Weekbrief</button>
+</div>
+
+<!-- 🧾 Sekcja Weekbrief -->
+<div id="weekbriefSection" class="card" style="display: none;">
+  <h2>Weekbrief</h2>
+ <div id="weekbriefInfoBar" class="info-bar">
+  ℹ️ Je formulier wordt automatisch opgeslagen. Je kunt dit elke dag bijwerken tot je het exporteert als PDF.
+</div>
+
+<form id="weekbriefForm"> 
+    <label>Naam:</label>
+    <input type="text" id="wbNaam" required />
+
+    <label>Weeknummer:</label>
+<input type="number" id="wbWeeknummer" readonly />
+
+<div>
+  <label for="manualWeek">📅 Stel week handmatig in:</label>
+  <input type="number" id="manualWeek" min="1" max="53" style="width: 60px;">
+  <button type="button" onclick="setWeekManually(event)">Stel week in</button>
+</div> 
+
+    <!-- Dynamiczna tabela z dniami tygodnia -->
+    <div id="weekbriefTable">
+      <!-- Bloki dni będą generowane dynamicznie w JS -->
+    </div>
+
+    <label>Weektotaal:</label>
+    <input type="number" id="wbTotaal" readonly />
+
+    <label>Handtekening:</label>
+    <input type="text" id="wbHandtekening" />
+
+    <div style="margin-top: 1rem;">
+      <button type="submit">📤 Exporteer naar PDF</button>
+      <button type="button" id="closeWeekbriefBtn" style="margin-left: 10px;">Sluiten</button>
+    </div>
+  </form>
+</div>
+
+    <!-- 🔍 Filtrowanie -->
+    <div class="filter-wrapper">
+      <label for="searchInput" class="icon-label">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path fill="limegreen" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.471 6.471 0 0 0 4.23-1.57l.27.28v.79l5 5L20.5 19l-5-5zm-6 0C8.01 14 6 11.99 6 9.5S8.01 5 10.5 5 15 7.01 15 9.5 12.99 14 10.5 14z"/>
+        </svg>
+        Filter projecten:
+      </label>
+      <input type="text" id="filterInput" placeholder="Typ naam van project..." />
+      <button id="clearFilterBtn" class="kosten-btn">❌ Wis filter</button>
+    </div>
+<h2>Opgeslagen projecten</h2>
+    <div class="table-wrapper">
+      <table class="project-table">
+        
+      <thead>
+  <tr>
+    <th style="width: 120px;">Naam</th>
+    <th style="width: 160px;">Omschrijving</th>
+    <th style="width: 120px;">Locatie</th>
+    <th style="width: 80px;">Uren</th>
+    <th style="width: 140px;">Materialen</th>
+    <th style="width: 140px;">Extra werk</th>
+    <th style="width: 140px;">Datum/Tijd</th>
+    <th style="width: 160px;">Werknemers</th>
+    <th style="width: 160px;">Media</th>
+    <th style="width: 100px;">Verwijderen</th>
+  </tr>
+</thead> 
+        <tbody id="projectenTabelBody"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<footer style="text-align:center; padding:10px; color:#777;">A.W. 2025</footer> 
+<!-- 📦 Firebase SDK + jsPDF + główny skrypt aplikacji -->
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<!-- 🔧 Główny skrypt aplikacji -->
+<script src="script.js"></script>
+
+
+<!-- 🔢 Numer wersji -->
+<div id="appVersion" class="version-banner hide">v1.8</div> 
+</body>
+</html> 
