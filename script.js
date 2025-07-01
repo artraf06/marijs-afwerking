@@ -1,6 +1,6 @@
 // == Firebase CONFIG ==
 const firebaseConfig = {
-  apiKey: "AIzaSyAqy1Tk3Z3F4v4SRDliq0hJRYL-LdOCr7M",
+  apiKey: AIzaSyB9cbmspJZLQ76Arm_-3Zmb7-hmoRTkZz8
   authDomain: "marijs-afwerking.firebaseapp.com",
   projectId: "marijs-afwerking",
   storageBucket: "marijs-afwerking.appspot.com",
