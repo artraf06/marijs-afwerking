@@ -336,7 +336,7 @@ function handleLogin(e) {
 
   if (
     (managers.includes(username) && password === "nl25") ||
-    (!managers.includes(username) && allUsers.includes(username) && password === "ma2025")
+    (!managers.includes(username) && allUsers.includes(username) && password === "ma25")
   ) {
     currentUser = username;
     sessionStorage.setItem("loggedInUser", currentUser);
