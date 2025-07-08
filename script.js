@@ -1,4 +1,4 @@
-// == Firebase CONFIG ==
+// === Firebase config & init ===
 const firebaseConfig = {
   apiKey: "AIzaSyB9cbmspJZLQ76Arm_-3Zmb7-hmoRTkZz8",
   authDomain: "marijs-afwerking.firebaseapp.com",
@@ -329,7 +329,7 @@ function exportWeekbriefToPDF() {
 } 
 
 
-function handleLogin(e) {
+async function handleLogin(e) {
   e.preventDefault();
   const username = document.getElementById("username").value.trim();
   const password = document.getElementById("password").value;
@@ -341,9 +341,43 @@ function handleLogin(e) {
     currentUser = username;
     sessionStorage.setItem("loggedInUser", currentUser);
     updateUI();
+    const updatesDoc = await db.collection("updates").doc("latest").get();
+if (updatesDoc.exists) {
+  const { tijd, projectName, field } = updatesDoc.data();
+  if (tijd) {
+    const lastChange = new Date(tijd);
+    const now = new Date();
+    const diffMinutes = (now - lastChange) / 1000 / 60;
+
+    if (diffMinutes < 60) {
+      const icon = document.getElementById("notificationBell");
+      if (icon) {
+        icon.classList.add("active");
+        icon.title = `Nieuw: ${field} gewijzigd in ${projectName}`;
+      }
+
+      // baner z napisem
+      const banner = document.createElement("div");
+      banner.className = "project-update-banner";
+      banner.textContent = `In project "${projectName}" is "${field}" gewijzigd.`;
+      document.body.appendChild(banner);
+
+      setTimeout(() => {
+        banner.remove();
+      }, 15000);
+    }
+  }
+} 
+
   } else {
     alert("Ongeldige inloggegevens");
   }
+}
+
+function handleLogout() {
+  currentUser = null;
+  sessionStorage.removeItem("loggedInUser");
+  updateUI();
 }
 
 function handleLogout() {
@@ -427,6 +461,14 @@ async function saveProject(e) {
   };
 
   await db.collection("projects").add(project);
+
+  // 🔔 ZAPISUJEMY INFORMACJĘ O ZMIANIE DO `updates`
+  await db.collection("updates").doc("latest").set({
+    tijd: new Date().toISOString(),
+    projectName: name,
+    field: "nieuw project"
+  });
+
   await loadProjects();
   e.target.reset();
   renderCheckboxes();
@@ -441,202 +483,215 @@ async function loadProjects() {
   projects.sort((a, b) => a.name.localeCompare(b.name));
   renderProjects(currentFilter);
 } 
-function renderProjects(filter = currentFilter) { currentFilter = filter; const filteredProjects = filter ? projects.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase())) : projects;
+function renderProjects(filter = currentFilter) {
+  currentFilter = filter;
+  const filteredProjects = filter
+    ? projects.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()))
+    : projects;
 
-const container = document.getElementById("projectenTabelBody"); container.innerHTML = "";
+  const container = document.getElementById("projectenTabelBody");
+  container.innerHTML = "";
 
-filteredProjects.forEach((project) => { const row = document.createElement("tr");
+  filteredProjects.forEach((project) => {
+    const row = document.createElement("tr");
 
-// Nazwa projektu
-const nameCell = document.createElement("td");
-nameCell.textContent = project.name || "";
-row.appendChild(nameCell); 
-// Omschrijving z lightboxem
-const omsCell = document.createElement("td");
-const omsDiv = document.createElement("div");
-omsDiv.className = "clickable-description";
-omsDiv.textContent = (project.omschrijving || "").substring(0, 100) + (project.omschrijving?.length > 100 ? "..." : "");
-omsDiv.onclick = () => openTextLightbox("Omschrijving", project.omschrijving || "", async (newText) => {
-  project.omschrijving = newText;
-  await db.collection("projects").doc(project.docId).update({ omschrijving: newText });
-  renderProjects(currentFilter);
-});
-omsCell.appendChild(omsDiv);
-omsCell.appendChild(document.createTextNode(" 📖"));
-row.appendChild(omsCell);
+    const nameCell = document.createElement("td");
+    nameCell.textContent = project.name || "";
+    row.appendChild(nameCell);
 
-const locCell = document.createElement("td");
-locCell.contentEditable = true;
-locCell.setAttribute("spellcheck", "false");
-locCell.textContent = project.locatie || "";
-locCell.addEventListener("input", async () => {
-  project.locatie = locCell.textContent.trim();
-  await db.collection("projects").doc(project.docId).update({ locatie: project.locatie });
-});
-row.appendChild(locCell); 
+    const omsCell = document.createElement("td");
+    const omsDiv = document.createElement("div");
+    omsDiv.className = "clickable-description";
+    omsDiv.textContent = project.omschrijving?.length
+      ? project.omschrijving.substring(0, 100) + (project.omschrijving.length > 100 ? "..." : "")
+      : "➕ Voeg omschrijving toe";
+    omsDiv.onclick = () => openTextLightbox("Omschrijving", project.omschrijving || "", async (newText) => {
+      project.omschrijving = newText;
+      await db.collection("projects").doc(project.docId).update({ omschrijving: newText });
+      logProjectUpdate(project, "omschrijving");
+      renderProjects(currentFilter);
+    });
+    omsCell.appendChild(omsDiv);
+    omsCell.appendChild(document.createTextNode(" 📖"));
+    row.appendChild(omsCell);
 
+    const locCell = document.createElement("td");
+    locCell.contentEditable = true;
+    locCell.setAttribute("spellcheck", "false");
+    locCell.textContent = project.locatie || "";
+    locCell.addEventListener("input", async () => {
+      project.locatie = locCell.textContent.trim();
+      await db.collection("projects").doc(project.docId).update({ locatie: project.locatie });
+    });
+    row.appendChild(locCell);
 
-// Uren
-const urenCell = document.createElement("td");
-urenCell.contentEditable = true;
-urenCell.setAttribute("spellcheck", "false");
-urenCell.textContent = project.uren || "";
-urenCell.addEventListener("input", async () => {
-  project.uren = urenCell.textContent.trim();
-  await db.collection("projects").doc(project.docId).update({ uren: project.uren });
-});
-row.appendChild(urenCell); 
+    const urenCell = document.createElement("td");
+    urenCell.contentEditable = true;
+    urenCell.setAttribute("spellcheck", "false");
+    urenCell.textContent = project.uren || "";
+    urenCell.addEventListener("input", async () => {
+      project.uren = urenCell.textContent.trim();
+      await db.collection("projects").doc(project.docId).update({ uren: project.uren });
+    });
+    row.appendChild(urenCell);
 
-// Materialen z lightboxem
-const matCell = document.createElement("td");
-const matDiv = document.createElement("div");
-matDiv.className = "clickable-description";
-matDiv.textContent = (project.materialen || "").substring(0, 100) + (project.materialen?.length > 100 ? "..." : "");
-matDiv.onclick = () => openTextLightbox("Materialen", project.materialen || "", async (newText) => {
-  project.materialen = newText;
-  await db.collection("projects").doc(project.docId).update({ materialen: newText });
-  renderProjects(currentFilter);
-});
-matCell.appendChild(matDiv);
-matCell.appendChild(document.createTextNode(" 📖"));
-row.appendChild(matCell);
+    const matCell = document.createElement("td");
+    const matDiv = document.createElement("div");
+    matDiv.className = "clickable-description";
+    matDiv.textContent = project.materialen?.length
+      ? project.materialen.substring(0, 100) + (project.materialen.length > 100 ? "..." : "")
+      : "➕ Voeg materialen toe";
+    matDiv.onclick = () => openTextLightbox("Materialen", project.materialen || "", async (newText) => {
+      project.materialen = newText;
+      await db.collection("projects").doc(project.docId).update({ materialen: newText });
+      logProjectUpdate(project, "materialen");
+      renderProjects(currentFilter);
+    });
+    matCell.appendChild(matDiv);
+    matCell.appendChild(document.createTextNode(" 📖"));
+    row.appendChild(matCell);
 
-// Extra werk z lightboxem
-const extraCell = document.createElement("td");
-const extraDiv = document.createElement("div");
-extraDiv.className = "clickable-description";
-extraDiv.textContent = (project.extra || "").substring(0, 100) + (project.extra?.length > 100 ? "..." : "");
-extraDiv.onclick = () => openTextLightbox("Extra werk", project.extra || "", async (newText) => {
-  project.extra = newText;
-  await db.collection("projects").doc(project.docId).update({ extra: newText });
-  renderProjects(currentFilter);
-});
-extraCell.appendChild(extraDiv);
-extraCell.appendChild(document.createTextNode(" 📖"));
-row.appendChild(extraCell); 
-// Tijd
+    const extraCell = document.createElement("td");
+    const extraDiv = document.createElement("div");
+    extraDiv.className = "clickable-description";
+    extraDiv.textContent = project.extra?.length
+      ? project.extra.substring(0, 100) + (project.extra.length > 100 ? "..." : "")
+      : "➕ Voeg extra werk toe";
+    extraDiv.onclick = () => openTextLightbox("Extra werk", project.extra || "", async (newText) => {
+      project.extra = newText;
+      await db.collection("projects").doc(project.docId).update({ extra: newText });
+      logProjectUpdate(project, "extra");
+      renderProjects(currentFilter);
+    });
+    extraCell.appendChild(extraDiv);
+    extraCell.appendChild(document.createTextNode(" 📖"));
+    row.appendChild(extraCell); 
 const tijdCell = document.createElement("td");
-tijdCell.textContent = project.tijd || "";
-row.appendChild(tijdCell);
+    tijdCell.textContent = project.tijd || "";
+    row.appendChild(tijdCell);
 
-// Werknemers (edytowalne)
-const werkerCell = document.createElement("td");
-werkerCell.contentEditable = true;
-werkerCell.setAttribute("spellcheck", "false"); // ← TO DODAJ
-werkerCell.textContent = (project.werknemers || []).join(", ");
-werkerCell.addEventListener("input", async () => {
-  project.werknemers = werkerCell.textContent.split(",").map(w => w.trim());
-  await db.collection("projects").doc(project.docId).update({ werknemers: project.werknemers });
-});
-row.appendChild(werkerCell); 
+    const werkerCell = document.createElement("td");
+    werkerCell.contentEditable = true;
+    werkerCell.setAttribute("spellcheck", "false");
+    werkerCell.textContent = (project.werknemers || []).join(", ");
+    werkerCell.addEventListener("input", async () => {
+      project.werknemers = werkerCell.textContent.split(",").map(w => w.trim());
+      await db.collection("projects").doc(project.docId).update({ werknemers: project.werknemers });
+    });
+    row.appendChild(werkerCell);
 
-// Media
-const mediaCell = document.createElement("td");
-mediaCell.className = "media-cell";
-const mediaPreview = document.createElement("div");
-mediaPreview.className = "media-preview";
+    const mediaCell = document.createElement("td");
+    mediaCell.className = "media-cell";
+    const mediaPreview = document.createElement("div");
+    mediaPreview.className = "media-preview";
 
-(project.media || []).forEach((m, index) => {
-  const wrapper = document.createElement("div");
-  let el;
+    (project.media || []).forEach((m, index) => {
+      const wrapper = document.createElement("div");
+      let el;
+      if (m.type === "img") {
+        el = document.createElement("img");
+        el.src = m.url;
+        el.className = "lightbox-item";
+        el.onclick = () => openLightbox(
+          project.media.filter(x => x.type === "img" || x.type === "video").map(x => x.url),
+          project.media.filter(x => x.type === "img" || x.type === "video").indexOf(m)
+        );
+      } else if (m.type === "video") {
+        el = document.createElement("video");
+        el.src = m.url;
+        el.controls = true;
+        el.className = "lightbox-item";
+        el.onclick = () => openLightbox(
+          project.media.filter(x => x.type === "img" || x.type === "video").map(x => x.url),
+          project.media.filter(x => x.type === "img" || x.type === "video").indexOf(m)
+        );
+      } else {
+        el = document.createElement("button");
+        el.textContent = `📥 ${m.name}`;
+        el.title = `Download: ${m.name}`;
+        el.className = "download-pdf-btn";
+        el.onclick = () => window.open(m.url, "_blank");
+      }
 
-  if (m.type === "img") {
-    el = document.createElement("img");
-    el.src = m.url;
-    el.className = "lightbox-item";
-    el.onclick = () => openLightbox((project.media || []).filter((x) => x.type === "img" || x.type === "video").map((x) => x.url), (project.media || []).filter((x) => x.type === "img" || x.type === "video").indexOf(m));
-  } else if (m.type === "video") {
-    el = document.createElement("video");
-    el.src = m.url;
-    el.controls = true;
-    el.className = "lightbox-item";
-    el.onclick = () => openLightbox((project.media || []).filter((x) => x.type === "img" || x.type === "video").map((x) => x.url), (project.media || []).filter((x) => x.type === "img" || x.type === "video").indexOf(m));
-  } else {
-    el = document.createElement("a");
-    el.href = m.url;
-    el.textContent = `📄 ${m.name}`;
-    el.target = "_blank";
-  }
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "X";
+      removeBtn.className = "remove-media-btn";
+      removeBtn.onclick = async () => {
+        project.media.splice(index, 1);
+        await db.collection("projects").doc(project.docId).update({ media: project.media });
+        logProjectUpdate(project, "media");
+        renderProjects(currentFilter);
+      };
 
-  const removeBtn = document.createElement("button");
-  removeBtn.textContent = "X";
-  removeBtn.className = "remove-media-btn";
-  removeBtn.onclick = async () => {
-    project.media.splice(index, 1);
-    await db.collection("projects").doc(project.docId).update({ media: project.media });
-    renderProjects(currentFilter);
-  };
+      wrapper.appendChild(el);
+      wrapper.appendChild(removeBtn);
+      mediaPreview.appendChild(wrapper);
+    });
 
-  wrapper.appendChild(el);
-  wrapper.appendChild(removeBtn);
-  mediaPreview.appendChild(wrapper);
-});
-
-const lightboxItems = (project.media || []).filter((x) => x.type === "img" || x.type === "video");
-if (lightboxItems.length > 2) {
-  const moreBtn = document.createElement("button");
-  moreBtn.textContent = `+${lightboxItems.length - 2}`;
-  moreBtn.className = "more-media-btn";
-  moreBtn.onclick = () => openLightbox(lightboxItems.map((x) => x.url), 2);
-  mediaPreview.appendChild(moreBtn);
-}
-
-const addInput = document.createElement("input");
-addInput.type = "file";
-addInput.multiple = true;
-addInput.addEventListener("change", async (e) => {
-  const files = Array.from(e.target.files);
-  const uploads = [];
-  for (const file of files) {
-    const filePath = `media/${Date.now()}_${file.name}`;
-    const ref = firebase.app().storage("marijs-afwerking.firebasestorage.app").ref().child(filePath);
-    await ref.put(file);
-    const url = await ref.getDownloadURL();
-    const type = file.type.startsWith("image") ? "img" : file.type.startsWith("video") ? "video" : "file";
-    uploads.push({ name: file.name, url, refPath: filePath, type });
-  }
-  project.media = [...(project.media || []), ...uploads];
-  await db.collection("projects").doc(project.docId).update({ media: project.media });
-  renderProjects(currentFilter);
-});
-
-mediaCell.appendChild(mediaPreview);
-mediaCell.appendChild(addInput);
-row.appendChild(mediaCell);
-
-// Usuń projekt
-const deleteCell = document.createElement("td");
-if (managers.includes(currentUser)) {
-  const deleteBtn = document.createElement("button");
-  deleteBtn.textContent = "Verwijder";
-  deleteBtn.className = "remove-media-btn";
-  deleteBtn.onclick = () => {
-    if (confirm("Weet je zeker dat je dit project wilt verwijderen?")) {
-      db.collection("projects").doc(project.docId).delete().then(() => {
-        loadProjects();
-      });
+    const lightboxItems = (project.media || []).filter(x => x.type === "img" || x.type === "video");
+    if (lightboxItems.length > 2) {
+      const moreBtn = document.createElement("button");
+      moreBtn.textContent = `+${lightboxItems.length - 2}`;
+      moreBtn.className = "more-media-btn";
+      moreBtn.onclick = () => openLightbox(lightboxItems.map(x => x.url), 2);
+      mediaPreview.appendChild(moreBtn);
     }
-  };
-  deleteCell.appendChild(deleteBtn);
-}
-row.appendChild(deleteCell);
-container.appendChild(row);
 
-// Kalkulacja kosztów
-if (managers.includes(currentUser)) {
-  const calcRow = document.createElement("tr");
-  const calcCell = document.createElement("td");
-  calcCell.colSpan = 10;
-  const calcBtn = document.createElement("button");
-  calcBtn.textContent = "📊 Bekijk calculatie";
-  calcBtn.className = "kosten-btn";
-  calcBtn.onclick = () => openCostSection(project);
-  calcCell.appendChild(calcBtn);
-  calcRow.appendChild(calcCell);
-  container.appendChild(calcRow);
-}
+    const addInput = document.createElement("input");
+    addInput.type = "file";
+    addInput.multiple = true;
+    addInput.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files);
+      const uploads = [];
+      for (const file of files) {
+        const filePath = `media/${Date.now()}_${file.name}`;
+        const ref = firebase.app().storage("marijs-afwerking.firebasestorage.app").ref().child(filePath);
+        await ref.put(file);
+        const url = await ref.getDownloadURL();
+        const type = file.type.startsWith("image") ? "img" : file.type.startsWith("video") ? "video" : "file";
+        uploads.push({ name: file.name, url, refPath: filePath, type });
+      }
+      project.media = [...(project.media || []), ...uploads];
+      await db.collection("projects").doc(project.docId).update({ media: project.media });
+      logProjectUpdate(project, "media");
+      renderProjects(currentFilter);
+    });
 
-}); }
+    mediaCell.appendChild(mediaPreview);
+    mediaCell.appendChild(addInput);
+    row.appendChild(mediaCell);
+
+    const deleteCell = document.createElement("td");
+    if (managers.includes(currentUser)) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.textContent = "Verwijder";
+      deleteBtn.className = "remove-media-btn";
+      deleteBtn.onclick = () => {
+        if (confirm("Weet je zeker dat je dit project wilt verwijderen?")) {
+          db.collection("projects").doc(project.docId).delete().then(() => {
+            loadProjects();
+          });
+        }
+      };
+      deleteCell.appendChild(deleteBtn);
+    }
+    row.appendChild(deleteCell);
+    container.appendChild(row);
+
+    if (managers.includes(currentUser)) {
+      const calcRow = document.createElement("tr");
+      const calcCell = document.createElement("td");
+      calcCell.colSpan = 10;
+      const calcBtn = document.createElement("button");
+      calcBtn.textContent = "📊 Bekijk calculatie";
+      calcBtn.className = "kosten-btn";
+      calcBtn.onclick = () => openCostSection(project);
+      calcCell.appendChild(calcBtn);
+      calcRow.appendChild(calcCell);
+      container.appendChild(calcRow);
+    }
+  });
+} 
 
 function openCostSection(project) {
   const container = document.createElement("div");
@@ -1136,4 +1191,16 @@ function openTextLightbox(title, content, onSave = null) {
 
   overlay.appendChild(box);
   document.body.appendChild(overlay);
+} 
+async function logProjectUpdate(project, field) {
+  try {
+    await db.collection("updatesLog").add({
+      projectName: project.name || "Onbekend project",
+      field: field,
+      user: currentUser || "Onbekend",
+      timestamp: new Date()
+    });
+  } catch (e) {
+    console.error("❌ Fout bij loggen van update:", e);
+  }
 } 
