@@ -31,6 +31,10 @@
   <!-- Tekst (omschrijving, materialen,extra werk) -->
   <div id="lightboxText" class="lightbox-text">
     <div id="lightboxTextContent"></div>
+    <!-- 🔔 Powiadomienie po zalogowaniu -->
+<div id="updateBanner" class="update-banner hidden">
+  🔔 Informatie: Dit project is bijgewerkt met nieuwe media of beschrijving.
+</div> 
 
     <!-- Edytowalne pole i przycisk zapisu -->
     <textarea id="lightboxTextarea" class="hidden"></textarea>
@@ -53,6 +57,8 @@
       <button id="logoutBtn">Uitloggen</button>
     </div>
   </div>
+  <!-- 🔔 Dzwonek alertu przed logowaniem -->
+<div id="ringIcon" class="ring-indicator hidden" title="Projectupdate beschikbaar!">🔔</div> 
 </header>
 
 <!-- 🔐 Sekcja logowania -->
@@ -201,30 +207,31 @@
       <input type="text" id="filterInput" placeholder="Typ naam van project..." />
       <button id="clearFilterBtn" class="kosten-btn">❌ Wis filter</button>
     </div>
-<h2>Opgeslagen projecten</h2>
-    <div class="table-wrapper">
-      <table class="project-table">
-        
+   
+<!-- 🔽 Tabela poza section w osobnym kontenerze -->
+<div id="tableSection" class="hidden table-fullwidth"></div>
+  <h2 style="padding-left: 20px;">Opgeslagen projecten</h2>
+  <div class="table-wrapper">
+    <table class="project-table">
       <thead>
-  <tr>
-    <th style="width: 120px;">Naam</th>
-    <th style="width: 160px;">Omschrijving</th>
-    <th style="width: 120px;">Locatie</th>
-    <th style="width: 80px;">Uren</th>
-    <th style="width: 140px;">Materialen</th>
-    <th style="width: 140px;">Extra werk</th>
-    <th style="width: 140px;">Datum/Tijd</th>
-    <th style="width: 160px;">Werknemers</th>
-    <th style="width: 160px;">Media</th>
-    <th style="width: 100px;">Verwijderen</th>
-  </tr>
-</thead> 
-        <tbody id="projectenTabelBody"></tbody>
-      </table>
-    </div>
-  </section>
-</div>
-
+        <tr>
+          <th>Naam</th>
+          <th>Omschrijving</th>
+          <th>Locatie</th>
+          <th>Uren</th>
+          <th>Materialen</th>
+          <th>Extra werk</th>
+          <th>Datum/Tijd</th>
+          <th>Werknemers</th>
+          <th>Media</th>
+          <th>Verwijderen</th>
+        </tr>
+      </thead>
+      <tbody id="projectenTabelBody"></tbody>
+    </table>
+  </div>
+   </section>
+</div> 
 <footer style="text-align:center; padding:10px; color:#777;">A.W. 2025</footer> 
 <!-- 📦 Firebase SDK + jsPDF + główny skrypt aplikacji -->
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
@@ -239,4 +246,6 @@
 <!-- 🔢 Numer wersji -->
 <div id="appVersion" class="version-banner hide">v1.8</div> 
 </body>
-</html> 
+</html>
+ 
+
