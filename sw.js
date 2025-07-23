@@ -1,5 +1,5 @@
-const STATIC_CACHE = "marijs-static-v35";
-const DYNAMIC_CACHE = "marijs-dynamic-v3";
+const STATIC_CACHE = "marijs-static-v36";
+const DYNAMIC_CACHE = "marijs-dynamic-v4";
 const STATIC_ASSETS = [
   "./index.html",
   "./styles.css",
