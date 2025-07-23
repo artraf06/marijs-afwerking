@@ -12,17 +12,11 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
-// == USERS ==
-const managers = ["Sjaak", "Jos", "Jacco", "Nanda"];
-const allUsers = [...managers, "Pieter", "Thijs", "Hilko", "Roel", "Benji"];
-let currentUser = null;
-let projects = [];
-let currentFilter = "";
-let currentLightboxIndex = 0;
-let currentLightboxItems = [];
+
  
 // == DOMContentLoaded ==
 document.addEventListener("DOMContentLoaded", () => {
+  
   const observeInputs = () => {
     const observer = new MutationObserver(() => saveWeekbriefLocally());
     const config = { childList: true, subtree: true };
@@ -68,7 +62,7 @@ document.addEventListener("DOMContentLoaded", () => {
     openWeekbriefBtn.addEventListener("click", () => {
       document.getElementById("weekbriefSection").style.display = "block";
       const storedWeek = localStorage.getItem("currentWeek");
-document.getElementById("wbWeeknummer").value = storedWeek || getCurrentWeekNumber(); 
+document.getElementById("wbWeeknummer").value = storedWeek || getCurrentWeekNumber();
       renderWeekbriefTable();
       loadWeekbriefLocally(); // Ładuje dane po renderowaniu
     });
@@ -95,7 +89,7 @@ document.getElementById("wbWeeknummer").value = storedWeek || getCurrentWeekNumb
   const projectForm = document.getElementById("projectForm");
   if (projectForm) {
     projectForm.addEventListener("submit", saveProject);
-  } 
+  }
   window.addEventListener("load", () => {
   const storedWeek = localStorage.getItem("currentWeek");
   if (storedWeek && parseInt(storedWeek) >= 1 && parseInt(storedWeek) <= 53) {
@@ -105,7 +99,7 @@ document.getElementById("wbWeeknummer").value = storedWeek || getCurrentWeekNumb
     document.getElementById("wbWeeknummer").value = currentWeek;
     localStorage.setItem("currentWeek", currentWeek);
   }
-}); 
+});
 // 👇 Zamknięcie lightboxa tekstowego
   const closeBtn = document.querySelector(".close-btn");
   if (closeBtn) {
@@ -114,7 +108,7 @@ document.getElementById("wbWeeknummer").value = storedWeek || getCurrentWeekNumb
     });
   }
 
-}); 
+});
 function getCurrentWeekNumber() {
   const now = new Date();
   const oneJan = new Date(now.getFullYear(), 0, 1);
@@ -180,7 +174,7 @@ function addEntryRow(dag, container) {
   // 🆕 zapisz natychmiast po dodaniu wiersza
   saveWeekbriefLocally();
   updateWeekTotaal();
-} 
+}
 
 function updateWeekTotaal() {
   let totaal = 0;
@@ -248,7 +242,7 @@ function loadWeekbriefLocally() {
   } catch (err) {
     console.error("Błąd podczas ładowania zapisanego Weekbrief:", err);
   }
-} 
+}
 
 function exportWeekbriefToPDF() {
   const naam = document.getElementById("wbNaam").value.trim();
@@ -326,9 +320,16 @@ function exportWeekbriefToPDF() {
 
     updateWeekTotaal();
   };
-} 
+}
 
-
+const managers = ["Sjaak", "Jos", "Jacco", "Nanda"];
+const allUsers = [...managers, "Pieter", "Thijs", "Hilko", "Roel", "Benji"];
+let currentUser = null;
+let currentUserRole = "";  // ← DODAJ TO
+let projects = [];
+let currentFilter = "";
+let currentLightboxIndex = 0;
+let currentLightboxItems = []; 
 async function handleLogin(e) {
   e.preventDefault();
   const username = document.getElementById("username").value.trim();
@@ -340,63 +341,41 @@ async function handleLogin(e) {
   ) {
     currentUser = username;
     sessionStorage.setItem("loggedInUser", currentUser);
+
     updateUI();
-    const updatesDoc = await db.collection("updates").doc("latest").get();
-if (updatesDoc.exists) {
-  const { tijd, projectName, field } = updatesDoc.data();
-  if (tijd) {
-    const lastChange = new Date(tijd);
-    const now = new Date();
-    const diffMinutes = (now - lastChange) / 1000 / 60;
 
-    if (diffMinutes < 60) {
-      const icon = document.getElementById("notificationBell");
-      if (icon) {
-        icon.classList.add("active");
-        icon.title = `Nieuw: ${field} gewijzigd in ${projectName}`;
-      }
-
-      // baner z napisem
-      const banner = document.createElement("div");
-      banner.className = "project-update-banner";
-      banner.textContent = `In project "${projectName}" is "${field}" gewijzigd.`;
-      document.body.appendChild(banner);
-
-      setTimeout(() => {
-        banner.remove();
-      }, 15000);
+    const key = `updateBannerClosed_${currentUser}`;
+    if (!sessionStorage.getItem(key)) {
+      renderUpdateBanner();
     }
-  }
-} 
 
   } else {
     alert("Ongeldige inloggegevens");
   }
-}
+} 
+
+
+
+
 
 function handleLogout() {
   currentUser = null;
   sessionStorage.removeItem("loggedInUser");
   updateUI();
 }
-
-function handleLogout() {
-  currentUser = null;
-  sessionStorage.removeItem("loggedInUser");
-  updateUI();
-}
-
 function updateUI() {
   const loggedIn = !!currentUser;
   const isManager = managers.includes(currentUser);
+
   document.getElementById("loginSection").style.display = loggedIn ? "none" : "block";
   document.getElementById("mainContent").style.display = loggedIn ? "block" : "none";
   document.getElementById("logoutSection").style.display = loggedIn ? "block" : "none";
   document.getElementById("welcomeUser").textContent = loggedIn ? `Welkome ${currentUser} 😊` : "";
   document.getElementById("projectForm").style.display = isManager ? "block" : "none";
+
   renderCheckboxes();
   loadProjects();
-}
+} 
 
 function renderCheckboxes() {
   const container = document.getElementById("werknemerCheckboxes");
@@ -406,7 +385,7 @@ function renderCheckboxes() {
     label.innerHTML = `<input type="checkbox" name="werknemers" value="${name}"> ${name}`;
     container.appendChild(label);
   });
-} 
+}
 async function saveProject(e) {
   e.preventDefault();
 
@@ -462,12 +441,26 @@ async function saveProject(e) {
 
   await db.collection("projects").add(project);
 
-  // 🔔 ZAPISUJEMY INFORMACJĘ O ZMIANIE DO `updates`
+  // 🔔 Info do 'updates'
   await db.collection("updates").doc("latest").set({
     tijd: new Date().toISOString(),
     projectName: name,
     field: "nieuw project"
   });
+
+  // 🔔 Zapis do 'updatesLog' z imionami (voor:)
+  try {
+    const voorTekst = werknemers.length ? ` voor: ${werknemers.join(", ")}` : "";
+    await db.collection("updatesLog").add({
+      timestamp: new Date(),
+      projectName: name || "onbekend",
+      field: "naam",
+      action: `Nieuw project toegevoegd veld: naam${voorTekst}`,
+      user: typeof currentUser === "string" ? currentUser : "onbekend"
+    });
+  } catch (err) {
+    console.error("❌ Błąd przy logowaniu update:", err);
+  }
 
   await loadProjects();
   e.target.reset();
@@ -481,14 +474,36 @@ async function loadProjects() {
     docId: doc.id
   }));
   projects.sort((a, b) => a.name.localeCompare(b.name));
+
+  // 🔁 Załaduj updatesLog zanim renderujesz banner
+  const updatesSnapshot = await db.collection("updatesLog")
+    .orderBy("timestamp", "desc")
+    .limit(50)
+    .get();
+  const updatesLog = updatesSnapshot.docs.map(doc => doc.data());
+
+  await renderUpdateBanner(updatesLog, projects); // ✅ przekazujemy dane
   renderProjects(currentFilter);
 } 
+function showUpdateNotice() {
+  const banner = document.getElementById("updateNotification");
+  if (banner) {
+    banner.classList.remove("hidden");
+  }
+}
+
+function closeUpdateNotice() {
+  const banner = document.getElementById("updateNotification");
+  if (banner) {
+    banner.classList.add("hidden");
+  }
+} 
+
 function renderProjects(filter = currentFilter) {
   currentFilter = filter;
   const filteredProjects = filter
-    ? projects.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()))
-    : projects;
-
+    ? projects.filter((p) => p.name?.toLowerCase().startsWith(filter.toLowerCase()))
+    : projects; 
   const container = document.getElementById("projectenTabelBody");
   container.innerHTML = "";
 
@@ -508,7 +523,7 @@ function renderProjects(filter = currentFilter) {
     omsDiv.onclick = () => openTextLightbox("Omschrijving", project.omschrijving || "", async (newText) => {
       project.omschrijving = newText;
       await db.collection("projects").doc(project.docId).update({ omschrijving: newText });
-      logProjectUpdate(project, "omschrijving");
+      logProjectUpdate(project.name, "omschrijving", "Omschrijving gewijzigd", currentUser);
       renderProjects(currentFilter);
     });
     omsCell.appendChild(omsDiv);
@@ -522,6 +537,7 @@ function renderProjects(filter = currentFilter) {
     locCell.addEventListener("input", async () => {
       project.locatie = locCell.textContent.trim();
       await db.collection("projects").doc(project.docId).update({ locatie: project.locatie });
+      logProjectUpdate(project.name, "locatie", "Locatie gewijzigd", currentUser);
     });
     row.appendChild(locCell);
 
@@ -532,6 +548,7 @@ function renderProjects(filter = currentFilter) {
     urenCell.addEventListener("input", async () => {
       project.uren = urenCell.textContent.trim();
       await db.collection("projects").doc(project.docId).update({ uren: project.uren });
+      logProjectUpdate(project.name, "uren", "Uren gewijzigd", currentUser);
     });
     row.appendChild(urenCell);
 
@@ -544,7 +561,7 @@ function renderProjects(filter = currentFilter) {
     matDiv.onclick = () => openTextLightbox("Materialen", project.materialen || "", async (newText) => {
       project.materialen = newText;
       await db.collection("projects").doc(project.docId).update({ materialen: newText });
-      logProjectUpdate(project, "materialen");
+      logProjectUpdate(project.name, "materialen", "Materialen gewijzigd", currentUser);
       renderProjects(currentFilter);
     });
     matCell.appendChild(matDiv);
@@ -560,13 +577,14 @@ function renderProjects(filter = currentFilter) {
     extraDiv.onclick = () => openTextLightbox("Extra werk", project.extra || "", async (newText) => {
       project.extra = newText;
       await db.collection("projects").doc(project.docId).update({ extra: newText });
-      logProjectUpdate(project, "extra");
+      logProjectUpdate(project.name, "extra", "Extra werk gewijzigd", currentUser);
       renderProjects(currentFilter);
     });
     extraCell.appendChild(extraDiv);
     extraCell.appendChild(document.createTextNode(" 📖"));
-    row.appendChild(extraCell); 
-const tijdCell = document.createElement("td");
+    row.appendChild(extraCell);
+
+    const tijdCell = document.createElement("td");
     tijdCell.textContent = project.tijd || "";
     row.appendChild(tijdCell);
 
@@ -577,6 +595,7 @@ const tijdCell = document.createElement("td");
     werkerCell.addEventListener("input", async () => {
       project.werknemers = werkerCell.textContent.split(",").map(w => w.trim());
       await db.collection("projects").doc(project.docId).update({ werknemers: project.werknemers });
+      logProjectUpdate(project.name, "werknemers", "Werknemers gewijzigd", currentUser);
     });
     row.appendChild(werkerCell);
 
@@ -588,6 +607,7 @@ const tijdCell = document.createElement("td");
     (project.media || []).forEach((m, index) => {
       const wrapper = document.createElement("div");
       let el;
+
       if (m.type === "img") {
         el = document.createElement("img");
         el.src = m.url;
@@ -619,7 +639,7 @@ const tijdCell = document.createElement("td");
       removeBtn.onclick = async () => {
         project.media.splice(index, 1);
         await db.collection("projects").doc(project.docId).update({ media: project.media });
-        logProjectUpdate(project, "media");
+        logProjectUpdate(project.name, "media", "Media verwijderd", currentUser);
         renderProjects(currentFilter);
       };
 
@@ -653,7 +673,7 @@ const tijdCell = document.createElement("td");
       }
       project.media = [...(project.media || []), ...uploads];
       await db.collection("projects").doc(project.docId).update({ media: project.media });
-      logProjectUpdate(project, "media");
+      logProjectUpdate(project.name, "media", "Nieuwe media toegevoegd", currentUser);
       renderProjects(currentFilter);
     });
 
@@ -670,6 +690,7 @@ const tijdCell = document.createElement("td");
         if (confirm("Weet je zeker dat je dit project wilt verwijderen?")) {
           db.collection("projects").doc(project.docId).delete().then(() => {
             loadProjects();
+            showUpdateNotice();
           });
         }
       };
@@ -1192,15 +1213,261 @@ function openTextLightbox(title, content, onSave = null) {
   overlay.appendChild(box);
   document.body.appendChild(overlay);
 } 
-async function logProjectUpdate(project, field) {
+async function logProjectUpdate(projectName, field, action, user) {
+  const update = {
+    timestamp: new Date(),
+    projectName: projectName || "onbekend",
+    field,
+    action,
+    user: user || "onbekend"
+  };
+
+  // Dodaj wartość tylko dla 'werknemers'
+  if (field === "werknemers") {
+    const project = projects.find(p => p.name === projectName);
+    if (project && Array.isArray(project.werknemers)) {
+      update.value = project.werknemers.join(", ");
+    }
+  }
+
   try {
-    await db.collection("updatesLog").add({
-      projectName: project.name || "Onbekend project",
-      field: field,
-      user: currentUser || "Onbekend",
-      timestamp: new Date()
-    });
-  } catch (e) {
-    console.error("❌ Fout bij loggen van update:", e);
+    await db.collection("updatesLog").add(update);
+  } catch (err) {
+    console.error("❌ Błąd przy zapisie update:", err);
   }
 } 
+
+
+
+
+async function deleteProject(projectId) {
+  if (!confirm("Weet je zeker dat je dit project wilt verwijderen?")) return;
+
+  try {
+    // Usuń projekt z Firestore
+    await deleteDoc(doc(db, "projects", projectId));
+
+    // Usuń pliki z Firebase Storage (jeśli są)
+    const mediaRef = ref(storage, `projects/${projectId}`);
+    try {
+      await deleteObject(mediaRef); // usunie folder, jeśli pusty
+    } catch (error) {
+      console.log("Storage folder not deleted (may not exist):", error.message);
+    }
+
+    // 🟡 USUWANIE UPDATE Z LOCALSTORAGE
+    delete projectUpdates[projectId];
+    localStorage.setItem("projectUpdates", JSON.stringify(projectUpdates));
+
+    loadProjects(); // odśwież tabelę
+    renderUpdateBanner(); // odśwież powiadomienia
+  } catch (error) {
+    console.error("Fout bij verwijderen:", error);
+    alert("Verwijderen mislukt.");
+  }
+} 
+
+async function cleanUpdatesLog() {
+  try {
+    const projectsSnap = await db.collection("projects").get();
+    const activeProjects = projectsSnap.docs.map(doc =>
+      (doc.data().name || "").toLowerCase().replace(/\s+/g, "")
+    );
+
+    const updatesSnap = await db.collection("updatesLog").orderBy("timestamp", "desc").get();
+    const updatesByProject = {};
+
+    updatesSnap.forEach(doc => {
+      const data = doc.data();
+      const nameKey = (data.projectName || "").toLowerCase().replace(/\s+/g, "");
+
+      if (!updatesByProject[nameKey]) updatesByProject[nameKey] = [];
+      updatesByProject[nameKey].push({ id: doc.id, ref: doc.ref, ...data });
+    });
+
+    const batch = db.batch();
+    let count = 0;
+
+    for (const [projectKey, updates] of Object.entries(updatesByProject)) {
+      if (activeProjects.includes(projectKey)) continue;
+
+      let hasDeleted = false;
+      for (const update of updates) {
+        if (!hasDeleted && update.action === "Project verwijderd") {
+          hasDeleted = true;
+          continue;
+        }
+        batch.delete(update.ref);
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      await batch.commit();
+      console.log(`🧹 Usunięto ${count} logów dla nieistniejących projektów (z wyjątkiem "verwijderd")`);
+    } else {
+      console.log("✅ Brak niepotrzebnych logów");
+    }
+  } catch (e) {
+    console.error("❌ Błąd cleanUpdatesLog:", e);
+  }
+} 
+async function renderUpdateBanner() {
+  try {
+    const snapshot = await db.collection("updatesLog")
+      .orderBy("timestamp", "desc")
+      .limit(100)
+      .get();
+    const updates = snapshot.docs.map(doc => doc.data());
+
+    const projectSnap = await db.collection("projects").get();
+    const existingNames = new Set(
+      projectSnap.docs.map(doc => (doc.data().name || "").toLowerCase().trim())
+    );
+
+    const recent = updates.filter(u => {
+      const t = u.timestamp?.toDate?.();
+      const okTime = t && (new Date() - t < 7.5 * 60 * 60 * 1000);
+      const name = (u.projectName || "").toLowerCase().trim();
+      return okTime && existingNames.has(name);
+    });
+
+    if (recent.length === 0 || !currentUser) return;
+
+    const shownKey = `updateBannerClosed_${currentUser}`;
+    if (sessionStorage.getItem(shownKey) === "true") return;
+
+    const grouped = new Map();
+    recent.forEach(u => {
+      const key = `${u.projectName}|${u.field}|${u.action}|${u.user}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(u);
+    });
+
+    const fieldIcons = {
+      werknemers: "👷",
+      materialen: "🧱",
+      media: "📷",
+      omschrijving: "📝",
+      naam: "🆕",
+      locatie: "🌍",
+      uren: "⏱️",
+      extra: "📌"
+    };
+
+    const html = [...grouped.entries()].map(([key, list]) => {
+      const [projectName, field, action, user] = key.split("|");
+      const icon = fieldIcons[field] || "🔹";
+      const last = list[0];
+      const count = list.length;
+      const time = last.timestamp?.toDate()?.toLocaleString("nl-NL") || "";
+      const extra = field === "werknemers" && last.value ? ` voor <b>${last.value}</b>` : "";
+      const color = action.includes("Nieuw") ? "#d1e7dd" : "#fff3cd"; // zielony / żółty
+
+      return `
+        <li style="background:${color}; padding: 6px; border-radius: 8px; margin-bottom: 5px;">
+          ${icon} <b>${projectName}</b>: ${action} veld <b>${field}</b>${extra} — ${user}, ${time}
+        </li>`;
+    }).join("");
+
+    let el = document.getElementById("projectUpdateBanner");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "projectUpdateBanner";
+      el.className = "update-banner";
+      el.innerHTML = `
+        <div style="font-weight:bold; font-size:18px; margin-bottom:6px;">🔔 Laatste projectupdates</div>
+        <ul style="list-style:none; padding:0;">${html}</ul>
+        <button onclick="closeProjectUpdateBanner()" class="sluit-btn">Sluiten</button>
+      `;
+      document.body.prepend(el);
+    } else {
+      el.querySelector("ul").innerHTML = html;
+      el.style.display = "block";
+    }
+
+  } catch (e) {
+    console.error("❌ Fout bij renderUpdateBanner:", e);
+  }
+} 
+
+
+
+// 🔘 Przycisk 'Sluiten'
+function closeProjectUpdateBanner() {
+  const el = document.getElementById("projectUpdateBanner");
+  if (el) el.style.display = "none";
+  if (currentUser) {
+    sessionStorage.setItem(`updateBannerClosed_${currentUser}`, "true");
+  }
+} 
+
+
+console.log("✅ Start app");
+window.addEventListener("load", () => {
+  console.log("✅ window loaded");
+}); 
+async function checkForRecentUpdates() {
+  const bell = document.getElementById("notificationBell");
+  const sound = document.getElementById("notificationSound");
+
+  const snapshot = await db.collection("updatesLog")
+    .orderBy("timestamp", "desc")
+    .limit(1)
+    .get();
+
+  if (!snapshot.empty) {
+    const latest = snapshot.docs[0].data();
+    const now = new Date();
+    const updatedAt = latest.timestamp.toDate();
+    const diffMinutes = (now - updatedAt) / (1000 * 60);
+
+    if (diffMinutes < 10) {
+      if (bell) bell.classList.remove("hidden");
+
+      const ringIcon = document.getElementById("ringIcon");
+      if (ringIcon) {
+        ringIcon.classList.remove("hidden");
+      }
+
+      try {
+        sound.play();
+      } catch (e) {
+        console.warn("🔕 Auto-play blocked. User interaction required.");
+      }
+    }
+  }
+} 
+
+function playNotificationSound() {
+  const audio = document.getElementById("notificationSound");
+  if (audio) {
+    audio.play().catch((err) => {
+      console.warn("🔇 Dźwięk nie został odtworzony:", err);
+    });
+  }
+} 
+document.getElementById("ringIcon").addEventListener("click", () => {
+  // Ukryj dzwonek i powiadomienie
+  document.getElementById("ringIcon").classList.add("hidden");
+  const bell = document.getElementById("notificationBell");
+  if (bell) bell.classList.add("hidden");
+
+  // Przewiń do logowania i ustaw focus
+  const loginSection = document.getElementById("loginSection");
+  const usernameInput = document.getElementById("username");
+
+  if (loginSection && usernameInput) {
+    loginSection.scrollIntoView({ behavior: "smooth" });
+    setTimeout(() => usernameInput.focus(), 500); // Poczekaj chwilkę aż scroll zadziała
+  }
+}); 
+document.addEventListener("DOMContentLoaded", () => {
+  const loginSection = document.getElementById("loginSection");
+  const mainContent = document.getElementById("mainContent");
+
+  // Jeśli użytkownik NIE jest zalogowany
+  if (!mainContent.classList.contains("visible") && !mainContent.classList.contains("show") && !mainContent.classList.contains("active")) {
+    checkForRecentUpdates();
+  }
+}); 
