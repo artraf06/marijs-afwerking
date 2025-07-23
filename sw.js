@@ -1,5 +1,5 @@
-const STATIC_CACHE = "marijs-static-v29";
-const DYNAMIC_CACHE = "marijs-dynamic-v2";
+const STATIC_CACHE = "marijs-static-v35";
+const DYNAMIC_CACHE = "marijs-dynamic-v3";
 const STATIC_ASSETS = [
   "./index.html",
   "./styles.css",
@@ -32,9 +32,21 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
+  const requestUrl = new URL(event.request.url);
+  const isAudio = requestUrl.pathname.endsWith("ding.mp3");
+
   event.respondWith(
     (async () => {
       const cache = await caches.open(DYNAMIC_CACHE);
+
+      // Nie cachujemy dźwięku
+      if (isAudio) {
+        try {
+          return await fetch(event.request);
+        } catch {
+          return new Response("🔕 Geen geluid beschikbaar offline.");
+        }
+      }
 
       // Obsługa nawigacji
       if (event.request.mode === "navigate") {
