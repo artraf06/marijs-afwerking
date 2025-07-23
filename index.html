@@ -41,10 +41,7 @@
     <button id="saveLightboxTextBtn" class="hidden">💾 Opslaan</button>
   </div>
 </div> 
-<!-- 🔔 Powiadomienie o aktualizacji -->
-<div id="updateNotification" class="update-banner hidden">
-  Nieuwe versie geladen. Pagina wordt herladen...
-</div> 
+
 
 <!-- 🔵 Nagłówek -->
 <header class="header">
@@ -60,6 +57,13 @@
   <!-- 🔔 Dzwonek alertu przed logowaniem -->
 <div id="ringIcon" class="ring-indicator hidden" title="Projectupdate beschikbaar!">🔔</div> 
 </header>
+<audio id="notificationSound" src="ding.mp3" preload="auto"></audio>
+<!-- 🟡 Projekt Update Banner -->
+<div id="projectUpdateBanner" class="update-banner hidden">
+  <strong>🟡 Laatste projectupdates:</strong>
+  <ul id="updateList"></ul>
+  <button onclick="document.getElementById('projectUpdateBanner').style.display='none'">Sluiten</button>
+</div> 
 
 <!-- 🔐 Sekcja logowania -->
 <div class="container">
