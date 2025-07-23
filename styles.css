@@ -1153,14 +1153,3 @@ input[type="file"]::file-selector-button {
   75% { transform: rotate(15deg); }
   100% { transform: rotate(0); }
 } 
-.project-table tr {
-  display: flex;
-  overflow-x: auto;
-  scroll-behavior: smooth;
-}
-
-.project-table td, .project-table th {
-  min-width: 120px;
-  flex: 0 0 auto;
-  white-space: nowrap;
-} 
