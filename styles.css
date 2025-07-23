@@ -1044,54 +1044,123 @@ input[type="file"]::file-selector-button {
   box-sizing: border-box;
   background-color: transparent;
 } 
-/* 🔔 Baner powiadomień po zalogowaniu (np. zmieniono coś w projektach) */
+/* 🔔 Powiadomienie o zmianach w projektach */
 .update-banner {
-  display: none;
-  background-color: #ffcc00;
-  color: black;
-  padding: 14px 20px;
-  text-align: center;
-  font-weight: bold;
-  font-size: 1rem;
   position: fixed;
-  top: 0;
+  top: 10px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 10000;
-  border-radius: 0 0 10px 10px;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  background-color: #fffbea;
+  color: #333;
+  padding: 18px 24px;
+  max-width: 95%;
+  max-height: 350px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  z-index: 9999;
+  border-radius: 12px;
+  font-family: sans-serif;
+  font-size: 15px;
+  animation: fadeInSlide 0.5s ease-out;
 }
 
-/* 🛎️ Ikona dzwonka informacyjnego (przed logowaniem) */
-.ring-indicator {
-  display: none;
-  position: fixed;
-  top: 14px;
-  right: 16px;
-  font-size: 22px;
-  color: #ffc107;
-  animation: ringAnim 1.2s ease infinite;
-  z-index: 10001;
+.update-banner ul {
+  margin: 10px 0;
+  padding-left: 0;
 }
 
-@keyframes ringAnim {
-  0% { transform: rotate(0deg); }
-  25% { transform: rotate(15deg); }
-  50% { transform: rotate(-15deg); }
-  75% { transform: rotate(10deg); }
-  100% { transform: rotate(0deg); }
+.update-banner li {
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
 
-} 
+.update-banner .sluit-btn {
+  background-color: #ffc107;
+  color: black;
+  border: none;
+  padding: 8px 16px;
+  margin-top: 10px;
+  font-weight: bold;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+.update-banner .sluit-btn:hover {
+  background-color: #e0a800;
+}
+
+/* 📱 Responsive */
 @media (max-width: 600px) {
   .update-banner {
-    top: 60px;
     font-size: 14px;
-    padding: 8px 16px;
+    max-height: 250px;
+    padding: 12px 16px;
   }
+}
 
-  .ring-indicator {
-    top: 10px;
-    right: 10px;
-    font-size: 20px;
+/* 🎞️ Animacja wejścia */
+@keyframes fadeInSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-30px);
   }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+} 
+.notification-bell {
+  background-color: #ffcc00;
+  color: #000;
+  padding: 10px 15px;
+  border-radius: 8px;
+  font-weight: bold;
+  font-size: 16px;
+  display: inline-block;
+  margin-bottom: 20px;
+  animation: pulse 1.5s infinite;
+  cursor: pointer;
+}
+
+.notification-bell.hidden {
+  display: none;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+} 
+.ring-indicator {
+  font-size: 24px;
+  color: gold;
+  animation: ring 1.5s infinite;
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  cursor: pointer;
+}
+
+.ring-indicator.hidden {
+  display: none;
+}
+
+@keyframes ring {
+  0% { transform: rotate(0); }
+  25% { transform: rotate(15deg); }
+  50% { transform: rotate(-15deg); }
+  75% { transform: rotate(15deg); }
+  100% { transform: rotate(0); }
+} 
+.project-table tr {
+  display: flex;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+}
+
+.project-table td, .project-table th {
+  min-width: 120px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 } 
