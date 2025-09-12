@@ -495,7 +495,24 @@ function exportWeekbriefToPDF() {
           week: weeknummer || ""
         });
 
-        // ✅ log + push po udanym zapisie
+        /* ──────────────────────────────────────────────
+           ➕ PUSH (callable Cloud Function)
+           ────────────────────────────────────────────── */
+        try {
+          const f = firebase.app().functions("us-central1");
+          const callSendPush = f.httpsCallable("sendPushNotification");
+          await callSendPush({
+            title: "📄 Weekbrief",
+            body: `Weekbrief opgeslagen — ${currentUser || "onbekend"} (week ${weeknummer || "?"})`,
+            projectName: "Weekbrief",
+            field: "weekbrief",
+            clickAction: window.location.origin // opcjonalnie: konkretna podstrona
+          });
+        } catch (e) {
+          console.warn("push (callable) failed:", e);
+        }
+
+        // ✅ log + push po udanym zapisie (Twoja istniejąca ścieżka)
         try {
           await notifyWeekbriefSaved({ week: weeknummer, year: now.getFullYear() });
         } catch (e) {
@@ -524,6 +541,7 @@ function exportWeekbriefToPDF() {
     updateWeekTotaal();
   };
 } 
+
 
 
 /** 🔼 Upload Weekbrief PDF do Storage + wpis do Firestore (kolekcja: weekbriefArchive) */
@@ -598,6 +616,22 @@ _wbClearRemovedFor({ filename, user: meta.user || "", week: meta.week || "" });
 
   return { url, path };
 }
+const f = firebase.app().functions("us-central1");
+
+async function notifyWeekbriefSaved({ week, year }) {
+  try {
+    await f.httpsCallable("sendPushNotification")({
+      title: "📄 Weekbrief",
+      body: `Nowy PDF dla tygodnia ${week}/${year}`,
+      projectName: "Weekbrief",
+      field: "weekbrief",
+      clickAction: window.location.origin
+    });
+    console.log("✅ Push wysłany po zapisie Weekbrief");
+  } catch (e) {
+    console.warn("❌ Błąd wysyłki push:", e);
+  }
+} 
 
 async function deleteWeekbriefFromArchive(id, encPath = "", encUrl = "") {
   if (!confirm("Weet je zeker dat je dit PDF-bestand wilt verwijderen?")) return;
@@ -2629,36 +2663,18 @@ function showPushBanner() {
 } 
 
 
-/* ── Wysłanie pushy do wszystkich ── */
 async function sendPushNotificationToAllUsers(title, body, projectName = "", field = "") {
   try {
-    const snapshot = await db.collection("pushTokens").get();
-    const tokens = snapshot.docs.map(doc => doc.id);
+    const functions = firebase.app().functions("us-central1");
+    const sendPush = functions.httpsCallable("sendPushNotification");
 
-    for (const token of tokens) {
-      await fetch("https://fcm.googleapis.com/fcm/send", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "key=AAAAkPY5Z10:APA91bEIHJ5AEqBWBglGdkkEBxv-WX6D-8bshNMzOd6DiNUgzuQ-SqMOj13ZFbMQASDOUbyKhzKArLq1-K0oCGz_jG5MWU0EAvMZg-H-Bmcj0MSH51gqgV5u6nDAgt0kpMXYaSUz1SIt"
-        },
-        body: JSON.stringify({
-          notification: {
-            title,
-            body,
-            icon: "/logo-192.png",
-            click_action: window.location.origin
-          },
-          data: { projectName, field },
-          to: token
-        })
-      });
-    }
-    console.log("📤 Push wysłany do wszystkich");
+    const result = await sendPush({ title, body, projectName, field });
+    console.log("📤 Push wysłany:", result.data);
   } catch (error) {
     console.error("❌ Błąd push:", error);
   }
-}
+} 
+
 /* =========================================================
    🔔 DZWONEK + DYMKI + AUDIO + PRE-LOGIN POLLING (SCALONE)
    ========================================================= */
