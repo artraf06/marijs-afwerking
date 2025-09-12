@@ -1,0 +1,11 @@
+[
+  {
+    "origin": [
+      "https://marijs-afwerking.web.app",
+      "https://bejewelled-nasturtium-5f6fb1.netlify.app"
+    ],
+    "method": ["GET", "POST", "PUT", "DELETE"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": ["Content-Type", "Access-Control-Allow-Origin"]
+  }
+] 

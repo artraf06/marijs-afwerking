@@ -1,0 +1,18 @@
+# global
+node_modules
+*.log
+.firebase
+.DS_Store
+
+# frontend cache/artefakty
+dist
+build
+
+# firebase functions
+ functions/node_modules
+functions/serviceAccountKey.json
+functions/.runtimeconfig.json
+# na wszelki wypadek – gdyby klucz leżał w root:
+serviceAccountKey.json
+serviceAccountkey.json 
+
