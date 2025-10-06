@@ -1,3 +1,4 @@
+
 /* sw.js — PWA + FCM + cache dla Netlify (z badge sygnałem do appki) */
 
 importScripts("https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js");
@@ -33,17 +34,18 @@ function buildNotificationFromPayload(p) {
   };
 
   const field = data.field || "";
-  const icon  = iconMap[field] || "🔔";
-  const proj  = data.projectName || notif.title || "Project";
-  const act   = data.action || notif.body || "Update";
+  const icon = iconMap[field] || "🔔";
+  const proj = data.projectName || notif.title || "Project";
+  const act = data.action || notif.body || "Update";
 
-  const title   = notif.title || `${icon} ${proj}`;
-  const body    = notif.body  || `${act}${field ? " – " + field : ""}`;
-  const iconUrl = notif.icon  || "/logo-192.png";
+  const title = notif.title || `${icon} ${proj}`;
+  const body = notif.body || `${act}${field ? " – " + field : ""}`;
 
-  // Tag per projekt / nazwa / timestamp (żeby nie nadpisywać wszystkich jednym)
+  // ujednolicamy ikonki (używasz /logo-192.png w cache)
+  const iconUrl = notif.icon || data.icon || "/logo-192.png";
+
   const tagBase =
-    (data.projectId   && `project-update-${data.projectId}`)   ||
+    (data.projectId && `project-update-${data.projectId}`) ||
     (data.projectName && `project-update-${data.projectName}`) ||
     `project-update-${Date.now()}`;
 
@@ -93,10 +95,23 @@ self.addEventListener("push", (event) => {
   event.waitUntil((async () => {
     let p = {};
     try { p = event.data.json(); } catch {}
-    // Jeśli backend nie trzyma się FCM-owego kształtu, ujednolicamy
+
+    // ❗️Anti-dupe: jeśli to FCM, pozwól obsłużyć firebase-messaging (onBackgroundMessage)
+    const d = p?.data || p;
+    if (
+      p?.from === "google.com/iid" ||
+      d?.["google.c.a.e"] != null ||
+      d?.["gcm.message_id"] != null ||
+      d?.["google.message_id"] != null ||
+      d?.["firebase-messaging-msg-id"] != null
+    ) {
+      return; // FCM przejmie to sam
+    }
+
+    // Normalizacja dla niestandardowych pushy
     const shaped = {
       notification: p.notification || { title: p.title, body: p.body, icon: p.icon },
-      data: p.data || p, // czasem całość siedzi w root
+      data: d
     };
 
     const { title, options } = buildNotificationFromPayload(shaped);
@@ -131,8 +146,8 @@ self.addEventListener("notificationclick", (event) => {
       const u = new URL(client.url);
       if (u.origin === self.location.origin) {
         await client.focus();
-        // Możesz też wysłać wiadomość do okna:
-        // client.postMessage({ type: "FROM_NOTIFICATION", data: event.notification.data });
+        // sygnał do strony — wyczyść badge/dymek itp.
+        try { client.postMessage({ type: "FOCUSED_FROM_NOTIFICATION" }); } catch {}
         return;
       }
     }
@@ -141,12 +156,12 @@ self.addEventListener("notificationclick", (event) => {
 });
 
 /* ==== Cache ==== */
-const APP_VERSION   = "v41";             // ⬅️ podbij przy deployu
-const STATIC_CACHE  = `marijs-static-${APP_VERSION}`;
+const APP_VERSION = "v55"; // ⬅️ podbij przy deployu, żeby oczyścić stary cache
+const STATIC_CACHE = `marijs-static-${APP_VERSION}`;
 const DYNAMIC_CACHE = `marijs-dynamic-${APP_VERSION}`;
 
 const STATIC_ASSETS = [
-  "/",                 // ważne na Netlify
+  "/", // ważne na Netlify
   "/index.html",
   "/styles.css",
   "/script.js",
@@ -183,7 +198,7 @@ self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 
-/* ==== Fetch: cache-first dla naszych assetów, network-first dla nawigacji ==== */
+/* ==== Fetch: cache-first dla assetów, network-first dla nawigacji ==== */
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -228,4 +243,5 @@ self.addEventListener("fetch", (event) => {
       }
     })());
   }
-}); 
+});
+

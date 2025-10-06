@@ -8,10 +8,31 @@ const firebaseConfig = {
   appId: "1:626287320904:web:6258025a253d5c9d849d7d",
   measurementId: "G-ND4T9807HG"
 };
+(() => {
+  const origFetch = window.fetch;
+  window.fetch = new Proxy(origFetch, {
+    apply(target, thisArg, args) {
+      const url = String(args?.[0] || "");
+      if (url.includes("cloudfunctions.net/sendPushNotification")) {
+        console.error("⚠️ Legacy fetch do sendPushNotification — powinno być httpsCallable!");
+        console.trace();
+        return Promise.reject(new Error("Blocked legacy fetch"));
+      }
+      return Reflect.apply(target, thisArg, args);
+    }
+  });
+})();
+
 
 // --- Firebase init ---
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+// ✅ Upewnij się, że Service Worker jest zarejestrowany od razu po starcie
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+    .then(() => console.log('✅ Service Worker registered'))
+    .catch(err => console.warn('⚠️ SW register error:', err));
+}
 
 // --- FCM (Web Push) ---
 let messaging = null;
@@ -65,32 +86,39 @@ async function initMessaging() {
 } 
 
 
-/** Prośba o zgodę, pobranie tokenu i zapis w Firestore */
-/** Prośba o zgodę, pobranie tokenu i zapis w Firestore */
 async function enablePushForUser(username) {
   try {
-    const inst = await initMessaging();              // ⬅️ upewnij się, że messaging jest gotowe
+    if (!('serviceWorker' in navigator)) return;
+
+    // 1) poczekaj na SW (masz rejestrację w HTML)
+    await navigator.serviceWorker.ready;
+
+    // 2) zainicjuj messaging JEDNYM miejscem (ustawi globalne `messaging`)
+    const inst = await initMessaging();
     if (!inst) {
       console.warn("enablePushForUser: messaging not ready");
       return;
     }
 
+    // 3) poproś o uprawnienie do notyfikacji
     let perm = Notification.permission;
     if (perm === "default") perm = await Notification.requestPermission();
     if (perm !== "granted") return;
 
+    // 4) pobierz token (używa naszego swReg z initMessaging)
     const token = await messaging.getToken({
       vapidKey: VAPID_KEY,
-      serviceWorkerRegistration: swReg,
+      serviceWorkerRegistration: swReg || await navigator.serviceWorker.ready,
     });
     if (!token) return;
 
+    // 5) zapisz token
     await saveUserToken(username, token);
     console.log("✅ Token zapisany:", username);
   } catch (err) {
-    console.error("❌ enablePushForUser error:", err);
+    console.warn("enablePushForUser warn:", err); // nie blokujemy logowania
   }
-} 
+}
 
 /** Zapis tokenu: users/{username}/tokens/{token} */
 async function saveUserToken(username, token) {
@@ -192,15 +220,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (openWeekbriefBtn) {
-    openWeekbriefBtn.addEventListener("click", () => {
-      document.getElementById("weekbriefSection").style.display = "block";
-      const storedWeek = localStorage.getItem("currentWeek");
-      document.getElementById("wbWeeknummer").value =
-        storedWeek || getCurrentWeekNumber();
-      renderWeekbriefTable();
-      loadWeekbriefLocally(); // po renderze
-    });
-  }
+  openWeekbriefBtn.addEventListener("click", () => {
+    document.getElementById("weekbriefSection").style.display = "block";
+    ensureWeekUpToDate();
+    renderWeekbriefTable();
+    loadWeekbriefLocally(); 
+    mountManualWeekControls(); // ⬅️ to MUSI być
+  });
+}
 
   if (closeWeekbriefBtn) {
     closeWeekbriefBtn.addEventListener("click", () => {
@@ -226,23 +253,10 @@ document.addEventListener("DOMContentLoaded", () => {
     projectForm.addEventListener("submit", saveProject);
   }
 
-  window.addEventListener("load", () => {
-    const storedWeek = localStorage.getItem("currentWeek");
-    const wb = document.getElementById("wbWeeknummer");
-    if (!wb) return;
-
-    if (
-      storedWeek &&
-      parseInt(storedWeek) >= 1 &&
-      parseInt(storedWeek) <= 53
-    ) {
-      wb.value = storedWeek;
-    } else {
-      const currentWeek = getCurrentWeekNumber();
-      wb.value = currentWeek;
-      localStorage.setItem("currentWeek", currentWeek);
-    }
-  });
+  // 🔁 przy starcie ustaw właściwy tydzień i zaplanuj auto-przeskok
+  ensureWeekUpToDate();
+  scheduleMidnightRefresh();
+  
 
   // close lightbox tekstowy
   const closeBtn = document.querySelector(".close-btn");
@@ -252,8 +266,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 });
+
+// 🔔 czyszczenie badga przy powrocie + odświeżenie tygodnia
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
+    ensureWeekUpToDate(); // ⬅️ DODANE
     if (navigator.clearAppBadge) {
       navigator.clearAppBadge().catch(()=>{});
     }
@@ -265,15 +282,130 @@ navigator.serviceWorker?.addEventListener?.("message", (e) => {
   if (e.data?.type === "FOCUSED_FROM_NOTIFICATION") {
     if (navigator.clearAppBadge) navigator.clearAppBadge().catch(()=>{});
   }
-}); 
+});
 
-// pomocnicze
-function getCurrentWeekNumber() {
-  const now = new Date();
-  const oneJan = new Date(now.getFullYear(), 0, 1);
-  const dayOfYear = (now - oneJan + 86400000) / 86400000;
-  return Math.ceil((dayOfYear + oneJan.getDay()) / 7);
+
+
+
+// ===== ISO week + storage helpers (NOWE) =====
+function getISOWeekInfo(d = new Date()) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7; // 1..7 (pon=1)
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const year = date.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return { year, week, label: `${year}-W${String(week).padStart(2,'0')}` };
 }
+
+// Zgodność z Twoim kodem – zwraca 1..53
+function getCurrentWeekNumber() {
+  return getISOWeekInfo().week;
+}
+
+const WEEK_STORAGE_WEEK = 'currentWeek'; // zostawiamy nazwę klucza
+const WEEK_STORAGE_YEAR = 'currentWeekYear';
+
+function readStoredWeek() {
+  const w = parseInt(localStorage.getItem(WEEK_STORAGE_WEEK) || '', 10);
+  const y = parseInt(localStorage.getItem(WEEK_STORAGE_YEAR) || '', 10);
+  return { week: isNaN(w) ? null : w, year: isNaN(y) ? null : y };
+}
+function writeStoredWeek(week, year) {
+  localStorage.setItem(WEEK_STORAGE_WEEK, String(week));
+  localStorage.setItem(WEEK_STORAGE_YEAR, String(year));
+}
+
+function ensureWeekUpToDate(force = false) {
+  const input = document.getElementById('wbWeeknummer');
+  if (!input) return;
+
+  const nowInfo = getISOWeekInfo(); // { year, week }
+  const stored = readStoredWeek(); // { year, week }
+  const manual = readManualFlag(); // true / false
+
+  const noStored = stored.week == null || stored.year == null;
+  const changed = stored.week !== nowInfo.week || stored.year !== nowInfo.year;
+
+  // Nowy tydzień/rok lub wymuszenie → wracamy do automatu i wyłączamy manual
+  if (force || noStored || changed) {
+    input.value = String(nowInfo.week);
+    writeStoredWeek(nowInfo.week, nowInfo.year);
+    writeManualFlag(false); // reset manuala przy nowym tygodniu
+    return;
+  }
+
+  // Ten sam tydzień:
+  if (manual) {
+    // zostaw ręcznie ustawioną wartość; jeśli pole puste, wstaw zapisany tydzień
+    if (!input.value) input.value = String(stored.week);
+  } else {
+    // brak manuala — trzymaj się zapisu (jeśli pole puste)
+    if (!input.value) input.value = String(stored.week);
+  }
+}
+function mountManualWeekControls() {
+  const display = document.getElementById('wbWeeknummer');
+  const manualInput = document.getElementById('manualWeek');
+  const setBtn = document.getElementById('setWeekBtn');
+  if (!display || !manualInput || !setBtn) return;
+
+  // Nie dubluj listenerów przy kolejnym otwarciu
+  if (setBtn.dataset.bound === '1') return;
+  setBtn.dataset.bound = '1';
+
+  const applyManual = () => {
+    const val = parseInt((manualInput.value || '').trim(), 10);
+    if (!Number.isFinite(val) || val < 1 || val > 53) {
+      alert('Podaj tydzień 1–53');
+      manualInput.focus();
+      return;
+    }
+    const nowInfo = getISOWeekInfo(); // bieżący rok
+    writeStoredWeek(val, nowInfo.year); // zapisz ręczną wartość
+    writeManualFlag(true); // manual aktywny do końca tego tygodnia
+
+    // USTAW wyświetlacz natychmiast
+    display.value = String(val);
+
+    // „Stabilizacja” na wypadek asynch. nadpisania
+    setTimeout(() => {
+      const d = document.getElementById('wbWeeknummer');
+      if (d) d.value = String(val);
+    }, 0);
+  };
+
+  setBtn.addEventListener('click', applyManual);
+  manualInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); applyManual(); }
+  });
+}
+
+// --- MANUAL OVERRIDE (ręczna zmiana tygodnia) ---
+const WEEK_STORAGE_MANUAL = 'currentWeekManual'; // 'true' / 'false'
+
+function readManualFlag() {
+  return localStorage.getItem(WEEK_STORAGE_MANUAL) === 'true';
+}
+function writeManualFlag(v) {
+  localStorage.setItem(WEEK_STORAGE_MANUAL, v ? 'true' : 'false');
+}
+
+
+// auto-przeskok po północy
+function scheduleMidnightRefresh() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(0, 0, 5, 0); // 00:00:05
+  if (next <= now) next.setDate(next.getDate() + 1);
+  setTimeout(() => {
+    ensureWeekUpToDate(true);
+    scheduleMidnightRefresh();
+  }, next - now);
+}
+
+
+// (Twoje) pomocnicze + reszta Weekbrief
 
 function renderWeekbriefTable() {
   const dagen = ["Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag"];
@@ -303,7 +435,6 @@ function renderWeekbriefTable() {
     container.appendChild(dayDiv);
   });
 }
-
 
 // Dodaj jeden wiersz z zadaniem do wskazanego dnia
 function addEntryRow(dag, container) {
@@ -409,7 +540,6 @@ function loadWeekbriefLocally() {
 }
 
 // Eksport Weekbrief do PDF + (asynchronicznie) upload do Storage/Firestore
-// Uwaga: saveWeekbriefPDFToStorage() definiujemy w CZĘŚCI 3/10
 function exportWeekbriefToPDF() {
   const naam = document.getElementById("wbNaam").value.trim();
   const weeknummer = document.getElementById("wbWeeknummer").value;
@@ -495,9 +625,6 @@ function exportWeekbriefToPDF() {
           week: weeknummer || ""
         });
 
-        /* ──────────────────────────────────────────────
-           ➕ PUSH (callable Cloud Function)
-           ────────────────────────────────────────────── */
         try {
           const f = firebase.app().functions("us-central1");
           const callSendPush = f.httpsCallable("sendPushNotification");
@@ -506,20 +633,18 @@ function exportWeekbriefToPDF() {
             body: `Weekbrief opgeslagen — ${currentUser || "onbekend"} (week ${weeknummer || "?"})`,
             projectName: "Weekbrief",
             field: "weekbrief",
-            clickAction: window.location.origin // opcjonalnie: konkretna podstrona
+            clickAction: window.location.origin
           });
         } catch (e) {
           console.warn("push (callable) failed:", e);
         }
 
-        // ✅ log + push po udanym zapisie (Twoja istniejąca ścieżka)
         try {
           await notifyWeekbriefSaved({ week: weeknummer, year: now.getFullYear() });
         } catch (e) {
           console.warn("notifyWeekbriefSaved:", e);
         }
 
-        // odśwież widok archiwum (jeśli sekcja jest w DOM)
         if (typeof loadWeekbriefArchive === "function") {
           await loadWeekbriefArchive();
         }
@@ -531,7 +656,10 @@ function exportWeekbriefToPDF() {
     // posprzątaj formularz i draft po eksporcie
     localStorage.removeItem(`weekbrief_${currentUser}`);
     document.getElementById("weekbriefForm").reset();
-    document.getElementById("wbWeeknummer").value = getCurrentWeekNumber();
+
+    // ⬇️ WAŻNE: szanuje ręczny numer w tym samym tygodniu;
+    // przy nowym tygodniu i tak wróci auto (bo ensureWeekUpToDate wykryje zmianę).
+    ensureWeekUpToDate(); // ← bez "true"
 
     const dagenLijst2 = ["Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag"];
     dagenLijst2.forEach(dag => {
@@ -540,9 +668,7 @@ function exportWeekbriefToPDF() {
     });
     updateWeekTotaal();
   };
-} 
-
-
+}
 
 /** 🔼 Upload Weekbrief PDF do Storage + wpis do Firestore (kolekcja: weekbriefArchive) */
 async function saveWeekbriefPDFToStorage(blob, filename, meta = {}) {
@@ -578,20 +704,20 @@ async function saveWeekbriefPDFToStorage(blob, filename, meta = {}) {
   });
 
   // ⇩⇩ NOWE: odkliknij ewentualne „skasowane” dla (user, week, filename)
-_wbClearRemovedFor({ filename, user: meta.user || "", week: meta.week || "" }); 
+  _wbClearRemovedFor({ filename, user: meta.user || "", week: meta.week || "" });
 
   // 2) LOG do updatesLog + PUSH + NATYCHMIAST pokaż na banerze
   try {
     await db.collection("updatesLog").add({
-      timestamp: new Date(),          // natychmiastowy time
-      projectName: "Weekbrief",       // ⬅️ spójna nazwa dla banera
+      timestamp: new Date(), // natychmiastowy time
+      projectName: "Weekbrief", // ⬅️ spójna nazwa dla banera
       field: "weekbrief",
       action: "Weekbrief opgeslagen",
       user: meta.user || "onbekend",
-      filename,                       // ⬅️ dodane – do dopasowania/usuwania
-      week: meta.week || "",          // ⬅️ dodane – do dopasowania/usuwania
-      value: filename || "",          // (zgodność wstecz)
-      _wbDocId: docRef.id             // ⬅️ twarde powiązanie z archiwum
+      filename, // ⬅️ dodane – do dopasowania/usuwania
+      week: meta.week || "", // ⬅️ dodane – do dopasowania/usuwania
+      value: filename || "", // (zgodność wstecz)
+      _wbDocId: docRef.id // ⬅️ twarde powiązanie z archiwum
     });
 
     // opcjonalny push
@@ -616,6 +742,7 @@ _wbClearRemovedFor({ filename, user: meta.user || "", week: meta.week || "" });
 
   return { url, path };
 }
+
 const f = firebase.app().functions("us-central1");
 
 async function notifyWeekbriefSaved({ week, year }) {
@@ -631,7 +758,7 @@ async function notifyWeekbriefSaved({ week, year }) {
   } catch (e) {
     console.warn("❌ Błąd wysyłki push:", e);
   }
-} 
+}
 
 async function deleteWeekbriefFromArchive(id, encPath = "", encUrl = "") {
   if (!confirm("Weet je zeker dat je dit PDF-bestand wilt verwijderen?")) return;
@@ -645,7 +772,7 @@ async function deleteWeekbriefFromArchive(id, encPath = "", encUrl = "") {
   };
 
   let path = decodeURIComponent(encPath || "");
-  const url  = decodeURIComponent(encUrl  || "");
+  const url = decodeURIComponent(encUrl || "");
   if (!path && url) path = extractPathFromUrl(url);
 
   try {
@@ -686,15 +813,13 @@ async function deleteWeekbriefFromArchive(id, encPath = "", encUrl = "") {
 
     console.log("✅ PDF usunięty z archiwum:", id);
     loadWeekbriefArchive(); // odśwież kafelki
-    // (opcjonalnie) szybkie odświeżenie banera po 150 ms
     setTimeout(() => { try { renderUpdateBanner?.(); } catch {} }, 150);
 
   } catch (e) {
     console.error("❌ Błąd usuwania PDF:", e);
     alert("Kon niet verwijderen: " + (e?.message || e));
   }
-} 
-
+}
 
 /** 🧹 Usuń powiązane wpisy 'weekbrief' z updatesLog (po filename / user / week) */
 async function removeWeekbriefLogsFromUpdatesLog({ filename = "", user = "", week = "" } = {}) {
@@ -711,8 +836,8 @@ async function removeWeekbriefLogsFromUpdatesLog({ filename = "", user = "", wee
   qs.forEach(doc => {
     const d = doc.data() || {};
     const dFn = norm(d.filename || d.value || "");
-    const dU  = norm(d.user || "");
-    const dW  = norm(String(d.week || ""));
+    const dU = norm(d.user || "");
+    const dW = norm(String(d.week || ""));
 
     if ((fn && dFn && dFn === fn) || ((u && dU === u) && (w && dW === w))) {
       toDelete.push(doc.ref);
@@ -733,16 +858,16 @@ function removeWeekbriefBannerItem({ filename = "", user = "", week = "" } = {})
   if (!banner) return;
 
   const fn = (filename || "").trim().toLowerCase();
-  const u  = (user || "").trim().toLowerCase();
-  const w  = String(week || "").trim().toLowerCase();
+  const u = (user || "").trim().toLowerCase();
+  const w = String(week || "").trim().toLowerCase();
 
   const items = banner.querySelectorAll('.update-item[data-field="weekbrief"]');
   let removed = 0;
 
   items.forEach(li => {
     const dFn = (li.getAttribute("data-filename") || "").trim().toLowerCase();
-    const dU  = (li.getAttribute("data-user") || "").trim().toLowerCase();
-    const dW  = (li.getAttribute("data-week") || "").trim().toLowerCase();
+    const dU = (li.getAttribute("data-user") || "").trim().toLowerCase();
+    const dW = (li.getAttribute("data-week") || "").trim().toLowerCase();
 
     const matchByFilename = fn && dFn && dFn === fn;
     const matchByUserWeek = u && w && dU === u && dW === w;
@@ -825,11 +950,11 @@ async function loadWeekbriefArchive() {
 
     const cards = qs.docs.map(doc => {
       const i = doc.data();
-      const when  = i.createdAt?.toDate?.()?.toLocaleString("nl-NL") || "";
+      const when = i.createdAt?.toDate?.()?.toLocaleString("nl-NL") || "";
       const title = (i.filename || "Weekbrief.pdf").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      const id    = doc.id;
-      const path  = encodeURIComponent(i.path || "");
-      const url   = encodeURIComponent(i.url  || "");
+      const id = doc.id;
+      const path = encodeURIComponent(i.path || "");
+      const url = encodeURIComponent(i.url || "");
 
       return `
         <div class="wb-card">
@@ -869,8 +994,9 @@ document.getElementById("refreshWbArchiveBtn")?.addEventListener("click", (e) =>
 });
 document.addEventListener("DOMContentLoaded", () => {
   loadWeekbriefArchive();
-}); 
-// --- Role / stan użytkownika (jak u Ciebie) ---
+});
+
+// --- Role / stan użytkownika ---
 const managers = ["Sjaak", "Jos", "Jacco", "Nanda"];
 const allUsers = [...managers, "Pieter", "Thijs", "Hilko", "Roel", "Benji"];
 let currentUser = null;
@@ -905,7 +1031,7 @@ async function handleLogin(e) {
   try { afterSuccessfulLoginHousekeeping?.(); } catch {}
 
   // Web Push dla zalogowanego usera
-  try { await enablePushForUser(username); } catch (e) { console.warn("enablePushForUser:", e); }
+  try {  await enablePushForUser(username); } catch (e) { console.warn("enablePushForUser:", e); }
 
   // Duży baner z update’ów – pokaż, jeśli w tej sesji nie był zamknięty
   const closedKey = `updateBannerClosed_${currentUser}`;
@@ -970,9 +1096,6 @@ function updateUI() {
     }
   }
 } 
-
-
-
 function renderCheckboxes() {
   const container = document.getElementById("werknemerCheckboxes");
   if (!container) return;
@@ -987,70 +1110,84 @@ function renderCheckboxes() {
 async function saveProject(e) {
   e.preventDefault();
 
-  const name        = document.getElementById("projectName").value.trim();
-  const omschrijving= document.getElementById("omschrijving").value.trim();
-  const locatie     = document.getElementById("locatie").value.trim();
-  const uren        = document.getElementById("uren").value.trim();
-  const materialen  = document.getElementById("materialen").value.trim();
-  const extra       = document.getElementById("extraWerk").value.trim();
-  const werknemers  = Array.from(document.querySelectorAll('input[name="werknemers"]:checked')).map(cb => cb.value);
-  const tijd        = new Date().toLocaleString();
+  const name = document.getElementById("projectName").value.trim();
+  const omschrijving = document.getElementById("omschrijving").value.trim();
+  const locatie = document.getElementById("locatie").value.trim();
+  const uren = document.getElementById("uren").value.trim();
+  const materialen = document.getElementById("materialen").value.trim();
+  const extra = document.getElementById("extraWerk").value.trim();
+  const werknemers = Array.from(document.querySelectorAll('input[name="werknemers"]:checked')).map(cb => cb.value);
+  const tijd = new Date().toLocaleString();
 
-  const mediaFiles = Array.from(document.getElementById("media").files);
-  const mediaURLs  = [];
+  const mediaFiles = Array.from(document.getElementById("media").files || []);
+  const mediaURLs = [];
 
-  const storage = firebase.app().storage("marijs-afwerking.firebasestorage.app");
-  const storageRef = storage.ref();
-
-  for (const file of mediaFiles) {
-    const filePath = `media/${Date.now()}_${file.name}`;
-    const fileRef  = storageRef.child(filePath);
-    await fileRef.put(file);
-    const downloadURL = await fileRef.getDownloadURL();
-
-    const type = file.type.startsWith("image") ? "img"
-               : file.type.startsWith("video") ? "video"
-               : "file";
-
-    mediaURLs.push({ name: file.name, type, url: downloadURL, refPath: filePath });
-  }
-
-  const project = {
-    name, omschrijving, locatie, uren, materialen, extra, werknemers,
-    tijd, media: mediaURLs, kosten: [], totalen: {}, werkzaamhedenData: {}
-  };
-
-  await db.collection("projects").add(project);
-
-  // prosty log
-  await db.collection("updates").doc("latest").set({
-    tijd: new Date().toISOString(),
-    projectName: name,
-    field: "nieuw project"
-  });
-
-  // log do updatesLog
   try {
-    const voorTekst = werknemers.length ? ` voor: ${werknemers.join(", ")}` : "";
-    await db.collection("updatesLog").add({
-      timestamp: new Date(),
-      projectName: name || "onbekend",
-      field: "naam",
-      action: `Nieuw project toegevoegd veld: naam${voorTekst}`,
-      user: typeof currentUser === "string" ? currentUser : "onbekend"
+    // Uploady (sekwencyjnie – jak chcesz szybciej, przerób na Promise.all)
+    const storage = firebase.app().storage("marijs-afwerking.firebasestorage.app");
+    const storageRef = storage.ref();
+
+    for (const file of mediaFiles) {
+      const filePath = `media/${Date.now()}_${file.name}`;
+      const fileRef = storageRef.child(filePath);
+      await fileRef.put(file);
+      const downloadURL = await fileRef.getDownloadURL();
+
+      const type = file.type?.startsWith("image") ? "img"
+                : file.type?.startsWith("video") ? "video"
+                : "file";
+
+      mediaURLs.push({ name: file.name, type, url: downloadURL, refPath: filePath });
+    }
+
+    const project = {
+      name, omschrijving, locatie, uren, materialen, extra, werknemers,
+      tijd, media: mediaURLs, kosten: [], totalen: {}, werkzaamhedenData: {}
+    };
+
+    // Zapis projektu
+    const docRef = await db.collection("projects").add(project);
+
+    // prosty log (zostawiam, jak masz)
+    await db.collection("updates").doc("latest").set({
+      tijd: new Date().toISOString(),
+      projectName: name,
+      field: "nieuw project"
     });
+
+    // log do updatesLog (pod baner/dzwonek)
+    try {
+      const voorTekst = werknemers.length ? ` voor: ${werknemers.join(", ")}` : "";
+      await db.collection("updatesLog").add({
+        timestamp: new Date(),
+        projectName: name || "onbekend",
+        field: "naam", // ← spójne z mapą ikon (👆 "naam")
+        action: `Nieuw project toegevoegd veld: naam${voorTekst}`,
+        user: typeof currentUser === "string" ? currentUser : "onbekend",
+        projectId: docRef.id
+      });
+    } catch (err) {
+      console.error("❌ Błąd przy logowaniu update:", err);
+    }
+
+    // UI odświeżenie
+    await loadProjects();
+    e.target?.reset?.();
+    renderCheckboxes?.();
+
+    // 🔔 PUSH – dopiero po sukcesie zapisu
+    await sendPushNotificationToAllUsers(
+      "📊 Nieuw project",
+      `Project ${name} is toegevoegd door ${currentUser || "onbekend"}`,
+      name, // projectName → trafi do payloadu (wykorzystasz w SW/kliknięciu)
+      "naam", // field → spójne z Twoją mapą ikon (👷, 🧱, 📷, ...); "naam" da 🔔/🆕
+      window.location.origin // clickAction → po kliknięciu otworzy Twoją aplikację
+    );
+
   } catch (err) {
-    console.error("❌ Błąd przy logowaniu update:", err);
+    console.error("saveProject error:", err);
+    alert("Kon project niet opslaan: " + (err?.message || err));
   }
-
-  await loadProjects();
-  e.target.reset();
-  renderCheckboxes();
-
-  await sendPushNotificationToAllUsers(
-    "📢 Nieuw project toegevoegd",
-    `Project: ${name} is net toegevoegd door ${currentUser || "een manager"}`
-  );
 }
 
 async function loadProjects() {
@@ -1064,9 +1201,11 @@ async function loadProjects() {
     .get();
   const updatesLog = updatesSnapshot.docs.map(doc => doc.data());
 
-  await renderUpdateBanner(updatesLog, projects); // dopasujemy w części z banerem
+  await renderUpdateBanner(updatesLog, projects);
   renderProjects(currentFilter);
-} 
+}
+
+
 
 function showUpdateNotice() {
   const banner = document.getElementById("updateNotification");
@@ -2663,18 +2802,21 @@ function showPushBanner() {
 } 
 
 
-async function sendPushNotificationToAllUsers(title, body, projectName = "", field = "") {
+async function sendPushNotificationToAllUsers(
+  title, body, projectName = "", field = "", clickAction = window.location.origin
+) {
   try {
-    const functions = firebase.app().functions("us-central1");
-    const sendPush = functions.httpsCallable("sendPushNotification");
-
-    const result = await sendPush({ title, body, projectName, field });
-    console.log("📤 Push wysłany:", result.data);
+    const f = firebase.app().functions("us-central1");
+    const call = f.httpsCallable("sendPushNotification");
+    const res = await call({ title, body, projectName, field, clickAction });
+    console.log("📤 Push OK:", res.data);
+    return res.data; // { success, ... }
   } catch (error) {
-    console.error("❌ Błąd push:", error);
+    console.warn("❌ Push callable failed:", error?.code, error?.message || error);
+    // NIE wyrzucamy wyjątku dalej – push nie psuje logiki zapisu
+    return { success: false, error: String(error?.message || error) };
   }
-} 
-
+}
 /* =========================================================
    🔔 DZWONEK + DYMKI + AUDIO + PRE-LOGIN POLLING (SCALONE)
    ========================================================= */
