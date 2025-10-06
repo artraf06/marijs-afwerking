@@ -156,7 +156,7 @@ self.addEventListener("notificationclick", (event) => {
 });
 
 /* ==== Cache ==== */
-const APP_VERSION = "v55"; // ⬅️ podbij przy deployu, żeby oczyścić stary cache
+const APP_VERSION = "v56"; // ⬅️ podbij przy deployu, żeby oczyścić stary cache
 const STATIC_CACHE = `marijs-static-${APP_VERSION}`;
 const DYNAMIC_CACHE = `marijs-dynamic-${APP_VERSION}`;
 
