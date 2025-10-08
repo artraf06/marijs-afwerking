@@ -46,29 +46,57 @@ async function initMessaging() {
   try {
     if (!("serviceWorker" in navigator)) return null;
 
+    // 1) czekamy aż /sw.js będzie aktywny i kontrolował stronę
     swReg = await navigator.serviceWorker.ready;
+
+    // 2) upewniamy się, że messaging istnieje
     if (!firebase.messaging) {
       console.warn("⚠️ Brak firebase.messaging – sprawdź <script> w index.html.");
       return null;
     }
     if (!messaging) messaging = firebase.messaging();
 
-    if (!initMessaging._onMessageBound) {
-      // --- 10) foreground handler ---
-      messaging.onMessage((payload) => {
-        const data  = payload?.data || {};
-        const notif = payload?.notification || {};
-        const iconMap = { werknemers:"👷", materialen:"🧱", media:"📷", omschrijving:"📝", naam:"🆕", locatie:"🌍", uren:"⏱️", extra:"📌",weekbrief:"📄" };
-        const field   = data.field || "";
-        const icon    = iconMap[field] || "🔔";
-        const proj    = data.projectName || notif.title || "Project";
-        const act     = notif.body || data.action || "Update";
-        const bellMsg = `${icon} ${proj}: ${act}${field ? " – " + field : ""}`;
-        const ts      = Number(data.ts || data.timestamp || Date.now());
+    // 3) (KLUCZOWE) powiedz FCM-owi, żeby używał TEGO service workera
+    if (typeof messaging.useServiceWorker === "function") {
+      try { messaging.useServiceWorker(swReg); } catch(_) {}
+    }
 
+    // 4) zbindowanie onMessage – tylko raz
+    if (!initMessaging._onMessageBound) {
+      messaging.onMessage((payload) => {
+        const data = payload?.data || {};
+        const notif = payload?.notification || {};
+        const iconMap = { werknemers:"👷", materialen:"🧱", media:"📷", omschrijving:"📝", naam:"🆕", locatie:"🌍", uren:"⏱️", extra:"📌", weekbrief:"📄" };
+
+        const field = data.field || "";
+        const icon = iconMap[field] || "🔔";
+        const proj = data.projectName || notif.title || "Powiadomienie";
+        const act = notif.body || data.action || (data.body || "");
+        const msg = `${icon} ${proj}${act ? ": " + act : ""}${field ? " – " + field : ""}`;
+        const ts = Number(data.ts || data.timestamp || Date.now());
+
+        // (opcjonalnie) pokaż też systemową notyfikację w foregroundzie
+        (async () => {
+          try {
+            const reg = swReg || (await navigator.serviceWorker.getRegistration());
+            if (reg && Notification.permission === "granted") {
+              await reg.showNotification(notif.title || data.title || proj, {
+                body: act,
+                icon: notif.icon || data.icon || "/logo-192.png",
+                badge: "/logo-192.png",
+                data
+              });
+              reg.active?.postMessage?.({ type: "INC_BADGE" });
+            }
+          } catch (e) {
+            console.warn("showNotification (foreground) failed:", e);
+          }
+        })();
+
+        // Twój UI
         const loggedIn = (typeof isLoggedIn === "function") ? isLoggedIn() : !!window.currentUser;
         if (!loggedIn) {
-          showBell(ts, bellMsg);     // ⬅️ kluczowe
+          showBell(ts, msg);
           showPushBanner?.();
         } else {
           renderUpdateBanner?.();
@@ -83,7 +111,91 @@ async function initMessaging() {
     console.error("❌ initMessaging error:", err);
     return null;
   }
-} 
+}
+
+/* ========= BADGE / LICZNIK ========= */
+const BADGE_KEY = "unreadCount";
+let unreadCount = Number(localStorage.getItem(BADGE_KEY) || 0);
+
+// elementy z UI (masz już dzwonek i badge w HTML)
+const ringIcon = document.getElementById("ringIcon");
+const ringBadge = document.getElementById("ringBadge");
+
+// ujednolicenie: pokaż/ukryj dzwonek i liczby
+function paintBadge() {
+  // liczba na ikonce dzwonka
+  if (ringBadge) {
+    if (unreadCount > 0) {
+      ringBadge.style.display = "inline-block";
+      ringBadge.textContent = String(unreadCount);
+      ringIcon?.classList?.remove("hidden");
+    } else {
+      ringBadge.style.display = "none";
+    }
+  }
+
+  // App Badging API (jeśli PWA zainstalowana)
+  if (navigator.setAppBadge) {
+    if (unreadCount > 0) navigator.setAppBadge(unreadCount).catch(()=>{});
+    else navigator.clearAppBadge?.().catch(()=>{});
+  }
+
+  // „kropka”/licznik w tytule karty jako fallback
+  const baseTitle = (paintBadge._baseTitle ||= document.title.replace(/^\(\d+\)\s+|\•\s+/,''));
+  if (unreadCount > 0) {
+    document.title = `(${unreadCount}) ${baseTitle}`;
+  } else {
+    document.title = baseTitle;
+  }
+}
+
+function setUnread(n) {
+  unreadCount = Math.max(0, Number(n) || 0);
+  localStorage.setItem(BADGE_KEY, String(unreadCount));
+  paintBadge();
+}
+
+function incUnread(by = 1) {
+  setUnread(unreadCount + by);
+}
+
+function clearUnread() {
+  setUnread(0);
+}
+
+// klik w dzwonek = wejście w listę/odczyt → wyzeruj
+ringIcon?.addEventListener?.("click", clearUnread);
+
+// gdy wracamy do karty – możesz wyzerować (lub zostawić, jak wolisz)
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    // tu decydujesz: clearUnread();
+    paintBadge();
+  }
+});
+
+// startowe odmalowanie
+paintBadge();
+
+/* ==== Odbiór wiadomości z Service Workera ==== */
+navigator.serviceWorker?.addEventListener?.("message", (e) => {
+  if (e.data?.type === "INC_BADGE") {
+    incUnread(1);
+
+    // opcjonalnie dźwięk tylko gdy karta w tle
+    try {
+      if (document.hidden) {
+        document.getElementById("notificationSound")?.play?.().catch(()=>{});
+      }
+    } catch {}
+  }
+
+  if (e.data?.type === "FOCUSED_FROM_NOTIFICATION") {
+    // po kliknięciu w push i wejściu do apki wyczyść
+    clearUnread();
+  }
+});
+
 
 
 async function enablePushForUser(username) {
@@ -1026,6 +1138,7 @@ async function handleLogin(e) {
 
   // UI -> część po zalogowaniu
   updateUI();
+  clearUnread?.();
 
   // Housekeeping: zgaś pre-login dzwonek/żółty pasek i ustaw „last seen”
   try { afterSuccessfulLoginHousekeeping?.(); } catch {}
@@ -2173,35 +2286,63 @@ function setWeekManually(event) {
   }
 }
 
-// ✅ Jedna rejestracja Service Workera + auto-reload po aktualizacji
+// ✅ Jedna rejestracja Service Workera + natychmiastowy auto-reload po aktualizacji
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").then((registration) => {
+  window.addEventListener("load", async () => {
+    try {
+      const registration = await navigator.serviceWorker.register("/sw.js"); // lepiej ze slash'em
+
+      // 🔄 Wymuś sprawdzenie aktualizacji od razu oraz okresowo
+      registration.update();
+      setInterval(() => registration.update(), 60 * 60 * 1000); // co godzinę
+
+      // 🪧 Pokaż baner + natychmiast przełącz na nowy SW
+      const askToReload = () => {
+        console.log("[APP] Nowa wersja dostępna!");
+        document.getElementById("updateNotification")?.classList.remove("hidden");
+
+        const versionBanner = document.getElementById("appVersion");
+        if (versionBanner) {
+          versionBanner.classList.remove("hide");
+          setTimeout(() => versionBanner.classList.add("hide"), 5000);
+        }
+      };
+
+      // Jeśli nowy SW już czeka (strona otwarta podczas deployu)
+      if (registration.waiting) {
+        askToReload();
+        registration.waiting.postMessage("SKIP_WAITING");
+      }
+
+      // Wykryj nową instalację
       registration.addEventListener("updatefound", () => {
         const newWorker = registration.installing;
+        if (!newWorker) return;
+
         newWorker.addEventListener("statechange", () => {
           if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-            console.log("[APP] Nowa wersja dostępna!");
-            document.getElementById("updateNotification")?.classList.remove("hidden");
-
-            const versionBanner = document.getElementById("appVersion");
-            if (versionBanner) {
-              versionBanner.classList.remove("hide");
-              setTimeout(() => versionBanner.classList.add("hide"), 5000);
-            }
-
-            setTimeout(() => newWorker.postMessage({ type: "SKIP_WAITING" }), 5000);
+            // Mamy świeżą wersję
+            askToReload();
+            // ⚡️ Nie czekaj 5s – przełącz od razu
+            newWorker.postMessage("SKIP_WAITING");
           }
         });
       });
-    }).catch((err) => console.error("❌ Service Worker error", err));
-  });
 
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (!refreshing) {
-      window.location.reload();
-      refreshing = true;
+      // Po przejęciu kontroli przez nowy SW – przeładuj 1x
+      let refreshed = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshed) return;
+        refreshed = true;
+        window.location.reload();
+      });
+
+      // Dodatkowo: gdy wrócisz do karty, sprawdź update
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") registration.update();
+      });
+    } catch (err) {
+      console.error("❌ Service Worker register error", err);
     }
   });
 }

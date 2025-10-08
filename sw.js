@@ -1,4 +1,3 @@
-
 /* sw.js — PWA + FCM + cache dla Netlify (z badge sygnałem do appki) */
 
 importScripts("https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js");
@@ -41,15 +40,14 @@ function buildNotificationFromPayload(p) {
   const title = notif.title || `${icon} ${proj}`;
   const body = notif.body || `${act}${field ? " – " + field : ""}`;
 
-  // ujednolicamy ikonki (używasz /logo-192.png w cache)
   const iconUrl = notif.icon || data.icon || "/logo-192.png";
-
-  const tagBase =
-    (data.projectId && `project-update-${data.projectId}`) ||
-    (data.projectName && `project-update-${data.projectName}`) ||
-    `project-update-${Date.now()}`;
-
   const click_action = data.click_action || data.url || "/";
+
+  // unikalny tag (ważne dla niektórych launcherów/badge)
+  const base = (data.projectId && `project-${data.projectId}`) ||
+               (data.projectName && `project-${data.projectName}`) ||
+               "project-update";
+  const tag = `${base}-${Date.now()}`;
 
   return {
     title,
@@ -57,13 +55,11 @@ function buildNotificationFromPayload(p) {
       body,
       icon: iconUrl,
       badge: "/logo-192.png",
-      vibrate: [120, 60, 120],
-      tag: tagBase,
+      vibrate: [300, 100, 300, 100, 300],
+      requireInteraction: true,
+      tag, // ⬅️ poprawka (było: tagBase)
       renotify: true,
-      data: {
-        ...data,
-        click_action,
-      },
+      data: { ...data, click_action },
     },
   };
 }
@@ -154,9 +150,8 @@ self.addEventListener("notificationclick", (event) => {
     await self.clients.openWindow(clickUrl);
   })());
 });
-
 /* ==== Cache ==== */
-const APP_VERSION = "v56"; // ⬅️ podbij przy deployu, żeby oczyścić stary cache
+const APP_VERSION = "v58"; // ⬅️ podbij przy deployu, żeby oczyścić stary cache
 const STATIC_CACHE = `marijs-static-${APP_VERSION}`;
 const DYNAMIC_CACHE = `marijs-dynamic-${APP_VERSION}`;
 
@@ -171,6 +166,7 @@ const STATIC_ASSETS = [
   "/ding.mp3"
 ];
 
+/* ==== Install ==== */
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE)
@@ -180,25 +176,33 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
 
+/* ==== Activate ==== */
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.map((k) =>
-          (k === STATIC_CACHE || k === DYNAMIC_CACHE) ? null : caches.delete(k)
-        )
+  event.waitUntil((async () => {
+    // usuń stare cache
+    const keys = await caches.keys();
+    await Promise.all(
+      keys.map((k) =>
+        (k === STATIC_CACHE || k === DYNAMIC_CACHE) ? null : caches.delete(k)
       )
-    )
-  );
-  self.clients.claim();
+    );
+    // przyspiesz HTML online
+    if (self.registration.navigationPreload) {
+      try { await self.registration.navigationPreload.enable(); } catch {}
+    }
+    await self.clients.claim();
+  })());
 });
 
-/* Odbiór komendy z appki (auto-update) */
+/* ==== Odbiór komendy z appki (auto-update) ==== */
 self.addEventListener("message", (event) => {
-  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+  const data = event.data;
+  if (data === "SKIP_WAITING" || (data && data.type === "SKIP_WAITING")) {
+    self.skipWaiting();
+  }
 });
 
-/* ==== Fetch: cache-first dla assetów, network-first dla nawigacji ==== */
+/* ==== Fetch: HTML network-first, assety cache-first ==== */
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -208,40 +212,49 @@ self.addEventListener("fetch", (event) => {
   if (!/^https?:$/.test(url.protocol)) return;
 
   // Omijaj Firebase/FCM/Storage – nie cache’ujemy
-  const isFirebase =
-    /firebaseio\.com|googleapis\.com|firebasestorage\.googleapis\.com/.test(url.host);
-  if (isFirebase) return;
+  if (/firebaseio\.com|googleapis\.com|firebasestorage\.googleapis\.com/.test(url.host)) {
+    return;
+  }
 
-  // Nawigacje: spróbuj sieć, a w razie czego index.html
-  if (req.mode === "navigate") {
+  const isHTML = req.mode === "navigate" || req.destination === "document";
+
+  if (isHTML) {
+    // HTML: network-first z no-store + preload; fallback do cache'owanego index.html
     event.respondWith((async () => {
       try {
-        return await fetch(req);
+        const preload = await event.preloadResponse;
+        if (preload) return preload;
+
+        const fresh = await fetch(req, { cache: "no-store" });
+        return fresh;
       } catch {
-        const cachedIndex = await caches.match("/index.html");
-        return cachedIndex || new Response("Offline.");
+        const cachedIndex = await caches.match("/index.html", { ignoreSearch: true });
+        return cachedIndex || new Response("Offline.", { status: 503, statusText: "Offline" });
       }
     })());
     return;
   }
 
-  // Assety z naszej domeny: cache-first
+  // Statyczne assety naszej domeny: cache-first (z dogrywką do dynamic cache)
   if (url.origin === self.location.origin) {
     event.respondWith((async () => {
-      const cached = await caches.match(req);
+      const cached = await caches.match(req, { ignoreSearch: true });
       if (cached) return cached;
 
       try {
         const resp = await fetch(req);
         if (resp && resp.ok && (resp.type === "basic" || resp.type === "cors")) {
           const dyn = await caches.open(DYNAMIC_CACHE);
-          dyn.put(req, resp.clone()).catch(() => {});
+          // klucz bez query, by uniknąć duplikatów
+          const cacheKey = new Request(req.url.split("?")[0], { method: "GET" });
+          dyn.put(cacheKey, resp.clone()).catch(() => {});
         }
         return resp;
       } catch {
-        return cached || new Response("Offline.");
+        return cached || new Response("Offline.", { status: 503, statusText: "Offline" });
       }
     })());
   }
 });
+
 
