@@ -198,7 +198,7 @@ if (self.registration.setAppBadge) {
 
 
 /* ==== Cache ==== */
-const APP_VERSION = "v61"; // ⬅️ podbij przy deployu
+const APP_VERSION = "v63"; // ⬅️ podbij przy deployu
 const STATIC_CACHE = `marijs-static-${APP_VERSION}`;
 const DYNAMIC_CACHE = `marijs-dynamic-${APP_VERSION}`;
 
