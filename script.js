@@ -179,22 +179,27 @@ paintBadge();
 
 /* ==== Odbiór wiadomości z Service Workera ==== */
 navigator.serviceWorker?.addEventListener?.("message", (e) => {
-  if (e.data?.type === "INC_BADGE") {
+  const t = e.data?.type;
+
+  if (t === "SET_BADGE") {
+    // 🔹 Gdy SW wyśle dokładną liczbę powiadomień (np. po starcie)
+    setUnread(e.data?.count || 0);
+  } else if (t === "INC_BADGE") {
+    // 🔹 Gdy przychodzi nowe powiadomienie — zwiększ licznik
     incUnread(1);
 
-    // opcjonalnie dźwięk tylko gdy karta w tle
+    // 🔔 Dźwięk tylko, gdy aplikacja w tle
     try {
       if (document.hidden) {
         document.getElementById("notificationSound")?.play?.().catch(()=>{});
       }
     } catch {}
-  }
-
-  if (e.data?.type === "FOCUSED_FROM_NOTIFICATION") {
-    // po kliknięciu w push i wejściu do apki wyczyść
+  } else if (t === "FOCUSED_FROM_NOTIFICATION") {
+    // 🔹 Gdy użytkownik kliknie powiadomienie i wróci do apki
     clearUnread();
   }
 });
+
 
 
 
@@ -3355,30 +3360,14 @@ if (navigator.serviceWorker) {
     }
   });
 } 
-// 🔔 Odbiór sygnałów z Service Workera (badge++)
-if (navigator.serviceWorker) {
-  navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data?.type === "INC_BADGE") {
-      try {
-        // np. podbij licznik na dzwonku
-        const badgeEl = document.getElementById("ringBadge");
-        if (badgeEl) {
-          let n = parseInt(badgeEl.textContent || "0", 10);
-          badgeEl.textContent = String(n + 1);
-          badgeEl.style.display = "inline-block"; // upewnij się, że widać
-        }
-      } catch (e) {
-        console.warn("Badge update failed:", e);
-      }
-    }
-  });
-} 
-document.getElementById("ringIcon")?.addEventListener("click", () => {
-  const badgeEl = document.getElementById("ringBadge");
-  if (badgeEl) {
-    badgeEl.textContent = "0";
-    badgeEl.style.display = "none";
-  }
-}); 
+
+
+// 🔁 Po starcie strony poproś SW o aktualny stan licznika
+(async () => {
+  try {
+    const reg = await navigator.serviceWorker?.ready;
+    reg?.active?.postMessage({ type: "REQUEST_BADGE" });
+  } catch {}
+})();
 
 
