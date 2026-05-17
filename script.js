@@ -1213,6 +1213,11 @@ function updateUI() {
       setTimeout(checkForRecentUpdates, 0);
     }
   }
+  // 🤖 AI Agent — tylko menedżerowie
+  if (typeof aiAgentInitUI === "function") aiAgentInitUI();
+  // 📦 Magazijn — pokaż/ukryj przycisk
+  const magCard = document.getElementById("openMagazijnBtn")?.closest(".card");
+  if (magCard) magCard.style.display = loggedIn ? "block" : "none";
 } 
 function renderCheckboxes() {
   const container = document.getElementById("werknemerCheckboxes");
@@ -3370,4 +3375,816 @@ if (navigator.serviceWorker) {
   } catch {}
 })();
 
+/* ============================================================
+   MAGAZIJN MODULE — wklej na KOŃCU pliku script.js
+   ============================================================
+   Uprawnienia:
+   - Menedżer: pełny dostęp (dodaj/edytuj/usuń produkt + ruchy)
+   - Pracownik: rejestrowanie przyjęć i rozchodów (ruchy)
+   - Wszyscy: w historii widać kto co zrobił
+   ============================================================ */
 
+const MAG_CATS = [
+  "Alles","Verf & lak","Gereedschap","Folie & tape",
+  "Grondverf","Reinigingsmiddelen","Behang & lijm",
+];
+
+let magProducts     = [];
+let magHistory      = [];
+let magEditId       = null;
+let magActiveFilter = "Alles";
+
+/* ─── UPRAWNIENIA ────────────────────────────────────────── */
+function magIsManager() {
+  return typeof managers !== "undefined" && managers.includes(currentUser);
+}
+
+/* ─── HELPERS ────────────────────────────────────────────── */
+function magStatus(p) {
+  if (p.qty === 0)   return "out";
+  if (p.qty < p.min) return "low";
+  return "ok";
+}
+function magStatusBadge(p) {
+  const s = magStatus(p);
+  if (s === "out") return `<span class="mag-badge mag-badge-out">Uitverkocht</span>`;
+  if (s === "low") return `<span class="mag-badge mag-badge-low">Laag</span>`;
+  return `<span class="mag-badge mag-badge-ok">In voorraad</span>`;
+}
+function magFmtDate(d) {
+  if (!d) return "";
+  const dt = (d.toDate ? d.toDate() : new Date(d));
+  return dt.toLocaleDateString("nl-NL", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+/* ─── ELEMENTY GŁÓWNEGO WIDOKU ───────────────────────────── */
+function magGetMainElements() {
+  return [
+    document.querySelector("#mainContent > h2"),
+    document.getElementById("projectForm"),
+    document.getElementById("openWeekbriefBtn")?.closest(".card"),
+    document.getElementById("weekbriefSection"),
+    document.getElementById("openMagazijnBtn")?.closest(".card"),
+    document.getElementById("open-ai-chat"),
+    document.getElementById("ai-chat-section"),
+    document.querySelector(".filter-wrapper"),
+    document.getElementById("projectTableWrapper"),
+  ].filter(Boolean);
+}
+
+/* ─── FIRESTORE ──────────────────────────────────────────── */
+async function magLoadProducts() {
+  try {
+    const snap = await db.collection("magazijn").orderBy("name").get();
+    magProducts = snap.docs.map(doc => ({ ...doc.data(), docId: doc.id }));
+  } catch (e) { console.warn("magLoadProducts:", e); magProducts = []; }
+}
+async function magLoadHistory() {
+  try {
+    const snap = await db.collection("magazijnHistory")
+      .orderBy("date", "desc").limit(100).get();
+    magHistory = snap.docs.map(doc => ({ ...doc.data(), docId: doc.id }));
+  } catch (e) { console.warn("magLoadHistory:", e); magHistory = []; }
+}
+async function magRefreshAll() {
+  await Promise.all([magLoadProducts(), magLoadHistory()]);
+  magRenderAll();
+}
+
+/* ─── RENDER: METRYKI ────────────────────────────────────── */
+function magRenderMetrics() {
+  const total = magProducts.length;
+  const low   = magProducts.filter(p => magStatus(p) === "low").length;
+  const out   = magProducts.filter(p => magStatus(p) === "out").length;
+  const ok    = total - low - out;
+  const el    = document.getElementById("magMetrics");
+  if (!el) return;
+  el.innerHTML = `
+    <div class="mag-metric"><div class="mag-metric-label">Totaal producten</div><div class="mag-metric-val">${total}</div></div>
+    <div class="mag-metric"><div class="mag-metric-label">In voorraad</div><div class="mag-metric-val">${ok}</div></div>
+    <div class="mag-metric"><div class="mag-metric-label">Laag</div><div class="mag-metric-val warn">${low}</div></div>
+    <div class="mag-metric"><div class="mag-metric-label">Uitverkocht</div><div class="mag-metric-val danger">${out}</div></div>
+  `;
+}
+
+/* ─── RENDER: ALERT ──────────────────────────────────────── */
+function magRenderAlert() {
+  const alerts = magProducts.filter(p => magStatus(p) !== "ok");
+  const el = document.getElementById("magAlert");
+  if (!el) return;
+  if (alerts.length === 0) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `⚠️ <strong>${alerts.length} product${alerts.length > 1 ? "en" : ""}</strong> onder minimumvoorraad — check de inkooplijst.`;
+}
+
+/* ─── RENDER: FILTERS ────────────────────────────────────── */
+function magRenderFilters() {
+  const el = document.getElementById("magCatFilters");
+  if (!el) return;
+  el.innerHTML = MAG_CATS.map(c =>
+    `<button class="mag-cat-btn${c === magActiveFilter ? " active" : ""}"
+             onclick="magSetFilter('${c.replace(/'/g, "\\'")}')">${c}</button>`
+  ).join("");
+}
+function magSetFilter(f) {
+  magActiveFilter = f;
+  magRenderFilters();
+  magRenderTable(document.getElementById("magSearchInput")?.value || "");
+}
+
+/* ─── RENDER: TABELA ─────────────────────────────────────── */
+function magRenderTable(search = "") {
+  const q = (search || "").toLowerCase();
+  const filtered = magProducts.filter(p => {
+    const catOk    = magActiveFilter === "Alles" || p.cat === magActiveFilter;
+    const searchOk = !q || (p.name||"").toLowerCase().includes(q) || (p.cat||"").toLowerCase().includes(q);
+    return catOk && searchOk;
+  });
+  const tbody = document.getElementById("magProductTable");
+  if (!tbody) return;
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" class="mag-empty">Geen producten gevonden</td></tr>`;
+    return;
+  }
+  const isManager = magIsManager();
+  tbody.innerHTML = filtered.map(p => `
+    <tr>
+      <td style="font-weight:bold">${p.name || ""}</td>
+      <td><span class="mag-cat-tag">${p.cat || ""}</span></td>
+      <td><strong>${p.qty ?? 0}</strong></td>
+      <td style="color:#aaa">${p.unit || ""}</td>
+      <td style="color:#aaa">${p.min ?? 0}</td>
+      <td>${magStatusBadge(p)}</td>
+      <td style="display:flex;gap:4px;flex-wrap:wrap;">
+        <button class="mag-btn" style="font-size:12px" onclick="magOpenMoveModalFor('${p.docId}','in')">+ Ontvangen</button>
+        <button class="mag-btn" style="font-size:12px" onclick="magOpenMoveModalFor('${p.docId}','out')">− Verbruikt</button>
+        ${isManager ? `
+          <button class="mag-btn" onclick="magOpenEditModal('${p.docId}')">✏️</button>
+          <button class="mag-btn-danger" onclick="magDeleteProduct('${p.docId}')">🗑</button>
+        ` : ""}
+      </td>
+    </tr>
+  `).join("");
+}
+
+/* ─── RENDER: HISTORIA ───────────────────────────────────── */
+function magRenderHistory() {
+  const el = document.getElementById("magHistoryList");
+  if (!el) return;
+  if (magHistory.length === 0) {
+    el.innerHTML = `<div class="mag-empty">Nog geen bewegingen geregistreerd.</div>`;
+    return;
+  }
+  el.innerHTML = magHistory.map(h => `
+    <div class="mag-hist-row">
+      <div class="mag-hist-icon ${h.type === "in" ? "mag-hist-in" : "mag-hist-out"}">
+        ${h.type === "in" ? "↓" : "↑"}
+      </div>
+      <div class="mag-hist-info">
+        <div class="mag-hist-name">${h.productName || ""}</div>
+        <div class="mag-hist-meta">
+          ${magFmtDate(h.date)}
+          ${h.note ? " · " + h.note : ""}
+          · <strong style="color:#90ee90">${h.user || "onbekend"}</strong>
+        </div>
+      </div>
+      <div class="mag-hist-qty ${h.type === "in" ? "mag-qty-in" : "mag-qty-out"}">
+        ${h.type === "in" ? "+" : "−"}${h.qty} ${h.unit || ""}
+      </div>
+    </div>
+  `).join("");
+}
+
+/* ─── RENDER: INKOOPLIJST ────────────────────────────────── */
+function magRenderShopList() {
+  const el = document.getElementById("magShopList");
+  if (!el) return;
+  const low = magProducts.filter(p => magStatus(p) !== "ok").sort((a, b) => a.qty - b.qty);
+  if (low.length === 0) {
+    el.innerHTML = `<div class="mag-empty">✅ Geen producten nodig — voorraad is op orde!</div>`;
+    return;
+  }
+  el.innerHTML = low.map(p => {
+    const bestel = Math.max(0, p.min * 2 - p.qty);
+    return `
+      <div class="mag-shop-item">
+        <div class="mag-shop-item-info">
+          <strong>${p.name}</strong>
+          <small>${p.cat} · huidig: ${p.qty} ${p.unit} · min: ${p.min} ${p.unit}</small>
+        </div>
+        <div class="mag-shop-qty">+${bestel} ${p.unit}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+/* ─── RENDER: TOOLBAR ────────────────────────────────────── */
+function magRenderToolbar() {
+  const el = document.getElementById("magVoorraadToolbar");
+  if (!el) return;
+  el.innerHTML = `
+    <input type="text" id="magSearchInput" placeholder="🔍 Zoek product..." oninput="magRenderTable(this.value)" />
+    ${magIsManager() ? `<button class="mag-btn-primary" onclick="magOpenAddModal()">+ Product toevoegen</button>` : ""}
+  `;
+}
+
+/* ─── RENDER: ZAKŁADKI ───────────────────────────────────── */
+function magRenderTabs() {
+  const el = document.getElementById("magTabsBar");
+  if (!el) return;
+  // Inkooplijst widzi tylko menedżer
+  el.innerHTML = `
+    <button class="mag-tab active" onclick="magShowTab('voorraad')">📋 Voorraad</button>
+    <button class="mag-tab" onclick="magShowTab('bewegingen')">🔄 Bewegingen</button>
+    ${magIsManager() ? `<button class="mag-tab" onclick="magShowTab('inkoop')">🛒 Inkooplijst</button>` : ""}
+  `;
+}
+
+/* ─── RENDER: WSZYSTKO NARAZ ─────────────────────────────── */
+function magRenderAll() {
+  magRenderMetrics();
+  magRenderAlert();
+  magRenderToolbar();
+  magRenderTabs();
+  magRenderFilters();
+  magRenderTable(document.getElementById("magSearchInput")?.value || "");
+  magRenderHistory();
+  magRenderShopList();
+  const clearBtn = document.getElementById("magClearHistoryBtn");
+if (clearBtn) clearBtn.style.display = magIsManager() ? "inline-block" : "none";
+}
+
+/* ─── ZAKŁADKI ───────────────────────────────────────────── */
+function magShowTab(tab) {
+  ["voorraad", "bewegingen", "inkoop"].forEach((t, i) => {
+    const content = document.getElementById(`mag-tab-${t}`);
+    const btns    = document.querySelectorAll(".mag-tab");
+    if (content) content.classList.toggle("hidden", t !== tab);
+    if (btns[i])  btns[i].classList.toggle("active", t === tab);
+  });
+}
+
+/* ─── MODAL: PRODUKT (tylko menedżer) ───────────────────── */
+function magOpenAddModal() {
+  if (!magIsManager()) return;
+  magEditId = null;
+  document.getElementById("magModalTitle").textContent = "Product toevoegen";
+  document.getElementById("magFName").value = "";
+  document.getElementById("magFCat").value  = "Verf & lak";
+  document.getElementById("magFUnit").value = "stuks";
+  document.getElementById("magFQty").value  = "0";
+  document.getElementById("magFMin").value  = "5";
+  document.getElementById("magAddModal").classList.remove("hidden");
+}
+function magOpenEditModal(docId) {
+  if (!magIsManager()) return;
+  const p = magProducts.find(x => x.docId === docId);
+  if (!p) return;
+  magEditId = docId;
+  document.getElementById("magModalTitle").textContent = "Product bewerken";
+  document.getElementById("magFName").value = p.name || "";
+  document.getElementById("magFCat").value  = p.cat  || "Verf & lak";
+  document.getElementById("magFUnit").value = p.unit || "stuks";
+  document.getElementById("magFQty").value  = p.qty  ?? 0;
+  document.getElementById("magFMin").value  = p.min  ?? 5;
+  document.getElementById("magAddModal").classList.remove("hidden");
+}
+function magCloseModal(id) {
+  document.getElementById(id)?.classList.add("hidden");
+}
+async function magSaveProduct() {
+  if (!magIsManager()) return;
+  const name = (document.getElementById("magFName").value || "").trim();
+  if (!name) { alert("Voer een productnaam in."); return; }
+  const data = {
+    name,
+    cat:       document.getElementById("magFCat").value,
+    unit:      document.getElementById("magFUnit").value,
+    qty:       parseInt(document.getElementById("magFQty").value) || 0,
+    min:       parseInt(document.getElementById("magFMin").value) || 0,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: currentUser || "onbekend",
+  };
+  try {
+    if (magEditId) {
+      await db.collection("magazijn").doc(magEditId).update(data);
+    } else {
+      data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+      data.createdBy = currentUser || "onbekend";
+      await db.collection("magazijn").add(data);
+    }
+    magCloseModal("magAddModal");
+    await magRefreshAll();
+  } catch (e) {
+    console.error("magSaveProduct:", e);
+    alert("Opslaan mislukt: " + (e?.message || e));
+  }
+}
+async function magDeleteProduct(docId) {
+  if (!magIsManager()) return;
+  const p = magProducts.find(x => x.docId === docId);
+  if (!confirm(`Weet je zeker dat je "${p?.name || docId}" wilt verwijderen?`)) return;
+  try {
+    await db.collection("magazijn").doc(docId).delete();
+    await magRefreshAll();
+  } catch (e) {
+    console.error("magDeleteProduct:", e);
+    alert("Verwijderen mislukt: " + (e?.message || e));
+  }
+}
+
+/* ─── MODAL: RUCH — otwiera z wybranym produktem i typem ── */
+function magOpenMoveModalFor(docId, type) {
+  const p = magProducts.find(x => x.docId === docId);
+  if (!p) return;
+  // wypełnij select produktem
+  const sel = document.getElementById("magMProduct");
+  sel.innerHTML = magProducts.map(pr =>
+    `<option value="${pr.docId}" ${pr.docId === docId ? "selected" : ""}>${pr.name} (${pr.qty} ${pr.unit})</option>`
+  ).join("");
+  // ustaw typ
+  document.getElementById("magMType").value = type;
+  document.getElementById("magMQty").value  = "1";
+  document.getElementById("magMNote").value = "";
+  document.getElementById("magMoveModal").classList.remove("hidden");
+}
+function magOpenMoveModal() {
+  const sel = document.getElementById("magMProduct");
+  if (!sel) return;
+  sel.innerHTML = magProducts.map(p =>
+    `<option value="${p.docId}">${p.name} (${p.qty} ${p.unit})</option>`
+  ).join("");
+  document.getElementById("magMType").value = "out";
+  document.getElementById("magMQty").value  = "1";
+  document.getElementById("magMNote").value = "";
+  document.getElementById("magMoveModal").classList.remove("hidden");
+}
+async function magSaveMove() {
+  const docId = document.getElementById("magMProduct").value;
+  const type  = document.getElementById("magMType").value;
+  const qty   = parseInt(document.getElementById("magMQty").value) || 1;
+  const note  = (document.getElementById("magMNote").value || "").trim();
+  const p = magProducts.find(x => x.docId === docId);
+  if (!p) return;
+  if (type === "out" && qty > p.qty) {
+    alert(`Niet genoeg voorraad! Beschikbaar: ${p.qty} ${p.unit}`); return;
+  }
+  const newQty = type === "in" ? p.qty + qty : p.qty - qty;
+  try {
+    await db.collection("magazijn").doc(docId).update({
+      qty: newQty,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: currentUser || "onbekend",
+    });
+    await db.collection("magazijnHistory").add({
+      productId:   docId,
+      productName: p.name,
+      unit:        p.unit,
+      type, qty, note,
+      user: currentUser || "onbekend",
+      date: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    magCloseModal("magMoveModal");
+    await magRefreshAll();
+    magShowTab("bewegingen");
+  } catch (e) {
+    console.error("magSaveMove:", e);
+    alert("Registreren mislukt: " + (e?.message || e));
+  }
+}
+
+/* ─── KOPIUJ INKOOPLIJST ─────────────────────────────────── */
+function magCopyShopList() {
+  const low = magProducts.filter(p => magStatus(p) !== "ok");
+  if (low.length === 0) { alert("Geen producten nodig!"); return; }
+  const text = "Inkooplijst\n" +
+    low.map(p => `- ${p.name}: +${Math.max(0, p.min * 2 - p.qty)} ${p.unit}`).join("\n");
+  navigator.clipboard.writeText(text)
+    .then(() => alert("✅ Inkooplijst gekopieerd!"))
+    .catch(() => alert("Kopiëren mislukt."));
+}
+
+/* ─── OPEN / SLUIT SECTIE ────────────────────────────────── */
+function magOpenSection() {
+  magGetMainElements().forEach(el => el.style.display = "none");
+  const section = document.getElementById("magazijnSection");
+  if (section) section.style.display = "block";
+  if (typeof db !== "undefined" && typeof magRefreshAll === "function") {
+    magRefreshAll();
+  }
+}async function magClearOldHistory() {
+  if (!magIsManager()) return;
+  if (!confirm("Weet je zeker dat je alle bewegingen ouder dan 30 dagen wilt verwijderen?")) return;
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 30);
+
+  try {
+    const snap = await db.collection("magazijnHistory")
+      .where("date", "<", cutoff)
+      .get();
+
+    if (snap.empty) {
+      alert("Geen oude bewegingen gevonden.");
+      return;
+    }
+
+    const batch = db.batch();
+    snap.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+
+    alert(`✅ ${snap.size} oude beweging(en) verwijderd.`);
+    await magRefreshAll();
+  } catch (e) {
+    console.error("magClearOldHistory:", e);
+    alert("Mislukt: " + (e?.message || e));
+  }
+}
+
+function magCloseSection() {
+  const section = document.getElementById("magazijnSection");
+  if (section) section.style.display = "none";
+  const restore = {
+    "#mainContent > h2":    "block",
+    "#projectForm":         "block",
+    ".filter-wrapper":      "flex",
+    "#projectTableWrapper": "block",
+    "#open-ai-chat":        "block",
+  };
+  Object.entries(restore).forEach(([sel, val]) => {
+    const el = document.querySelector(sel);
+    if (el) el.style.display = val;
+  });
+  const magCard = document.getElementById("openMagazijnBtn")?.closest(".card");
+  if (magCard) magCard.style.display = "block";
+  const wbCard = document.getElementById("openWeekbriefBtn")?.closest(".card");
+  if (wbCard) wbCard.style.display = "block";
+}
+/* ============================================================
+   AI BOUWASSISTENT — wklej na KOŃCU pliku script.js
+   ============================================================
+   Używa Claude API przez Firebase Function (claudeProxy)
+   Obsługuje: PDF, zdjęcia, wyceny, m², materiały, oferty
+   Dostęp: tylko menedżerowie
+   ============================================================ */
+
+const AI_CLAUDE_URL = "https://us-central1-marijs-afwerking.cloudfunctions.net/claudeProxy";
+
+/* ─── STAN ───────────────────────────────────────────────── */
+let aiFiles    = [];
+let aiMessages = [];
+let aiIsTyping = false;
+
+/* ─── SYSTEM PROMPT ──────────────────────────────────────── */
+const AI_SYSTEM_PROMPT = `Je bent een gespecialiseerde AI-assistent voor Marijs Afwerking, een Nederlands schildersbedrijf.
+
+Je expertise:
+- Lezen en analyseren van technische tekeningen, plattegronden en bouwkundige PDF's
+- Analyseren van foto's van ruimtes en gebouwen
+- Berekenen van oppervlakten (m²): vloer, wand, plafond
+- Tellen en catalogiseren van: ramen, deuren, kozijnen, plinten, trappen
+- Schatten van materialen: verf (liter/m²), behang (rollen), grondverf, lak
+- Opstellen van gedetailleerde offertes met arbeidskosten en materiaalprijzen
+- Advies over schildertechnieken en producten
+
+Standaard aannames voor berekeningen:
+- Verf dekking: 10-12 m² per liter (1 laag), 6-8 m² per liter (2 lagen)
+- Muurverf: altijd 2 lagen aanbevelen
+- Lakwerk ramen/deuren: 0.5L per raam (2 zijden), 0.75L per deur
+- Kozijn: 0.3L per kozijn
+- Arbeidstijd schilderwerk: 15-20 m²/uur muurverf, 2-3 ramen/uur lakwerk
+- Uurtarief: €45-55/uur (pas aan op verzoek)
+- BTW: 21%
+
+Antwoord altijd in het Nederlands.
+Wees concreet met getallen en berekeningen.
+Gebruik duidelijke tabellen voor overzichten.
+Bij een offerte: geef altijd subtotaal materialen, subtotaal arbeid, BTW en totaal.`;
+
+/* ─── OPEN / SLUIT ───────────────────────────────────────── */
+function aiAgentOpen() {
+  if (!magIsManager()) {
+    alert("Alleen managers hebben toegang tot de AI assistent.");
+    return;
+  }
+  magGetMainElements().forEach(el => el.style.display = "none");
+  const magCard = document.getElementById("openMagazijnBtn")?.closest(".card");
+  if (magCard) magCard.style.display = "none";
+  const aiCard = document.getElementById("aiAgentCard");
+  if (aiCard) aiCard.style.display = "none";
+  document.getElementById("aiAgentSection").style.display = "block";
+}
+
+function aiAgentClose() {
+  document.getElementById("aiAgentSection").style.display = "none";
+  const restore = {
+    "#mainContent > h2":    "block",
+    "#projectForm":         "block",
+    ".filter-wrapper":      "flex",
+    "#projectTableWrapper": "block",
+  };
+  Object.entries(restore).forEach(([sel, val]) => {
+    const el = document.querySelector(sel);
+    if (el) el.style.display = val;
+  });
+  const magCard = document.getElementById("openMagazijnBtn")?.closest(".card");
+  if (magCard) magCard.style.display = "block";
+  const wbCard = document.getElementById("openWeekbriefBtn")?.closest(".card");
+  if (wbCard) wbCard.style.display = "block";
+  const aiCard = document.getElementById("aiAgentCard");
+  if (aiCard) aiCard.style.display = "block";
+}
+
+/* ─── POKAZUJ PRZYCISK TYLKO MENEDŻEROM ─────────────────── */
+function aiAgentInitUI() {
+  const card = document.getElementById("aiAgentCard");
+  if (!card) return;
+  card.style.display = magIsManager() ? "block" : "none";
+}
+
+/* ─── OBSŁUGA PLIKÓW ─────────────────────────────────────── */
+async function aiHandleFiles(fileList) {
+  for (const file of Array.from(fileList)) {
+    const base64 = await aiFileToBase64(file);
+    const mediaType = file.type || "application/octet-stream";
+    const fileType = file.type.startsWith("image/") ? "image"
+                   : file.type === "application/pdf"  ? "pdf"
+                   : "other";
+    aiFiles.push({ name: file.name, base64, mediaType, fileType });
+  }
+  aiRenderFilePreviews();
+  aiRenderInputChips();
+  document.getElementById("aiFileInput").value = "";
+}
+
+function aiFileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function aiRenderFilePreviews() {
+  const el = document.getElementById("aiFilePreview");
+  if (!el) return;
+  el.innerHTML = aiFiles.map((f, i) => `
+    <div class="ai-file-chip">
+      <span>${f.fileType === "image" ? "🖼️" : f.fileType === "pdf" ? "📄" : "📎"}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span>
+      <button onclick="aiRemoveFile(${i})" title="Verwijder">✕</button>
+    </div>
+  `).join("");
+}
+
+function aiRenderInputChips() {
+  const el = document.getElementById("aiInputFileChips");
+  if (!el) return;
+  el.innerHTML = aiFiles.map((f, i) => `
+    <div class="ai-input-chip">
+      <span>${f.fileType === "image" ? "🖼️" : "📄"} ${f.name}</span>
+      <button onclick="aiRemoveFile(${i})">✕</button>
+    </div>
+  `).join("");
+}
+
+function aiRemoveFile(index) {
+  aiFiles.splice(index, 1);
+  aiRenderFilePreviews();
+  aiRenderInputChips();
+}
+
+/* ─── SZYBKIE PYTANIA ────────────────────────────────────── */
+function aiQuickAsk(question) {
+  document.getElementById("aiChatInput").value = question;
+  aiSendMessage();
+}
+
+/* ─── WYSYŁANIE WIADOMOŚCI ───────────────────────────────── */
+async function aiSendMessage() {
+  if (aiIsTyping) return;
+  const input = document.getElementById("aiChatInput");
+  const text  = (input.value || "").trim();
+  if (!text && aiFiles.length === 0) return;
+
+  const projNaam  = document.getElementById("aiProjNaam")?.value  || "";
+  const projAdres = document.getElementById("aiProjAdres")?.value || "";
+  const projKlant = document.getElementById("aiProjKlant")?.value || "";
+  const projType  = document.getElementById("aiProjType")?.value  || "";
+
+  const projContext = [
+    projNaam  ? `Project: ${projNaam}`   : "",
+    projAdres ? `Adres: ${projAdres}`    : "",
+    projKlant ? `Klant: ${projKlant}`    : "",
+    projType  ? `Type werk: ${projType}` : "",
+  ].filter(Boolean).join(" | ");
+
+  const fullText = projContext ? `[${projContext}]\n\n${text}` : text;
+
+  aiAddMessage("user", text, aiFiles.map(f => f.name));
+
+  const userContent = [];
+
+  for (const f of aiFiles) {
+    if (f.fileType === "image") {
+      userContent.push({
+        type: "image",
+        source: { type: "base64", media_type: f.mediaType, data: f.base64 }
+      });
+    } else if (f.fileType === "pdf") {
+      userContent.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: f.base64 }
+      });
+    }
+  }
+
+  userContent.push({ type: "text", text: fullText });
+  aiMessages.push({ role: "user", content: userContent });
+
+  input.value = "";
+  aiFiles = [];
+  aiRenderFilePreviews();
+  aiRenderInputChips();
+
+  aiIsTyping = true;
+  const typingId = aiAddTyping();
+
+  try {
+    const response = await fetch(AI_CLAUDE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system:     AI_SYSTEM_PROMPT,
+        messages:   aiMessages,
+        max_tokens: 2000,
+      })
+    });
+
+    const data = await response.json();
+    aiRemoveTyping(typingId);
+    aiIsTyping = false;
+
+    if (data.error) {
+      aiAddMessage("bot", `❌ Fout: ${data.error}`);
+      return;
+    }
+
+    const replyText = data.content?.map(c => c.text || "").join("") || "Geen antwoord ontvangen.";
+    aiMessages.push({ role: "assistant", content: replyText });
+    aiAddMessage("bot", replyText);
+
+    // Pokaż przycisk PDF tylko gdy jest pełna oferta z cenami
+    const hasOfferte = replyText.toLowerCase().includes("offerte") && 
+                       replyText.toLowerCase().includes("totaal") &&
+                       replyText.includes("€");
+    if (hasOfferte) {
+      aiAddPdfButton(replyText, projNaam || "Project");
+    }
+  } catch (err) {
+    aiRemoveTyping(typingId);
+    aiIsTyping = false;
+    console.error("AI error:", err);
+    aiAddMessage("bot", "❌ Verbindingsfout. Controleer je internetverbinding en probeer opnieuw.");
+  }
+}
+
+/* ─── RENDER CHAT ────────────────────────────────────────── */
+function aiAddMessage(role, text, fileNames = []) {
+  const el = document.getElementById("aiChatMessages");
+  if (!el) return;
+  const id   = "aimsg_" + Date.now();
+  const isBot = role === "bot";
+  const html  = aiMarkdownToHtml(text);
+  const filesHtml = fileNames.length
+    ? `<div style="margin-bottom:6px">${fileNames.map(n => `<span class="ai-input-chip" style="display:inline-flex;margin-right:4px;">📎 ${n}</span>`).join("")}</div>`
+    : "";
+  el.innerHTML += `
+    <div class="ai-msg ${isBot ? "ai-msg-bot" : "ai-msg-user"}" id="${id}">
+      <div class="ai-msg-avatar">${isBot ? "🤖" : "👷"}</div>
+      <div class="ai-msg-content">${filesHtml}${html}</div>
+    </div>
+  `;
+  el.scrollTop = el.scrollHeight;
+  return id;
+}
+
+function aiAddTyping() {
+  const el = document.getElementById("aiChatMessages");
+  if (!el) return;
+  const id = "typing_" + Date.now();
+  el.innerHTML += `
+    <div class="ai-msg ai-msg-bot ai-typing" id="${id}">
+      <div class="ai-msg-avatar">🤖</div>
+      <div class="ai-msg-content">
+        <div class="ai-typing-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+  `;
+  el.scrollTop = el.scrollHeight;
+  return id;
+}
+
+function aiRemoveTyping(id) {
+  document.getElementById(id)?.remove();
+}
+
+function aiAddPdfButton(content, projectName) {
+  const el = document.getElementById("aiChatMessages");
+  if (!el) return;
+  const safeContent = JSON.stringify(content);
+  const safeName    = projectName.replace(/'/g, "\\'");
+  el.innerHTML += `
+    <div class="ai-msg ai-msg-bot">
+      <div class="ai-msg-avatar">📄</div>
+      <div class="ai-msg-content">
+        <button class="ai-pdf-btn" onclick='aiExportPDF(${safeContent}, "${safeName}")'>
+          📥 Download offerte als PDF
+        </button>
+      </div>
+    </div>
+  `;
+  el.scrollTop = el.scrollHeight;
+}
+
+/* ─── MARKDOWN → HTML ────────────────────────────────────── */
+function aiMarkdownToHtml(text) {
+  if (!text) return "";
+  let html = text
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/^### (.*$)/gm, "<h4 style='color:#90ee90;margin:8px 0 4px'>$1</h4>")
+    .replace(/^## (.*$)/gm,  "<h3 style='color:#90ee90;margin:10px 0 4px'>$1</h3>")
+    .replace(/^# (.*$)/gm,   "<h2 style='color:#90ee90;margin:12px 0 6px'>$1</h2>")
+    .replace(/^[-•] (.*$)/gm, "<li style='margin:2px 0'>$1</li>")
+    .replace(/\n\n/g, "</p><p style='margin:6px 0'>")
+    .replace(/\n/g, "<br>");
+  html = aiConvertTables(html);
+  html = html.replace(/(<li.*<\/li>)/gs, "<ul style='margin:6px 0;padding-left:18px'>$1</ul>");
+  return `<p style='margin:0'>${html}</p>`;
+}
+
+function aiConvertTables(text) {
+  const tableRegex = /(\|.+\|[\r\n]+\|[-| :]+\|[\r\n]+((\|.+\|[\r\n]*)+))/g;
+  return text.replace(tableRegex, (match) => {
+    const lines = match.trim().split(/\r?\n/);
+    if (lines.length < 2) return match;
+    const headers = lines[0].split("|").filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join("");
+    const rows = lines.slice(2).map(line => {
+      const cells = line.split("|").filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join("");
+      return `<tr>${cells}</tr>`;
+    }).join("");
+    return `<div class="ai-offerte-block"><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  });
+}
+
+/* ─── EXPORT PDF ─────────────────────────────────────────── */
+function aiExportPDF(content, projectName) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const now = new Date();
+
+  const renderDoc = (withLogo) => {
+    if (withLogo) {
+      const logo = new Image();
+      logo.src = "logo-192.png";
+      logo.onload  = () => { doc.addImage(logo, "PNG", 10, 10, 20, 20); buildDoc(); };
+      logo.onerror = () => buildDoc();
+    } else {
+      buildDoc();
+    }
+  };
+
+  const buildDoc = () => {
+    doc.setFontSize(18); doc.setTextColor(0, 128, 0);
+    doc.text("Marijs Afwerking", 35, 22);
+    doc.setFontSize(11); doc.setTextColor(0);
+    doc.text("Offerte / Calculatie", 35, 30);
+    doc.setFontSize(10); doc.setTextColor(100);
+    doc.text(`Datum: ${now.toLocaleDateString("nl-NL")}`,            150, 20, { align: "right" });
+    doc.text(`Project: ${projectName}`,                              150, 28, { align: "right" });
+    doc.text(`Opgesteld door: ${currentUser || "Manager"}`,          150, 36, { align: "right" });
+    doc.setDrawColor(0, 128, 0); doc.setLineWidth(0.5);
+    doc.line(10, 40, 200, 40);
+
+    const cleanText = content
+      .replace(/<[^>]*>/g, "")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+    const lines = doc.splitTextToSize(cleanText, 180);
+    let y = 50;
+    doc.setFontSize(10); doc.setTextColor(0);
+    lines.forEach(line => {
+      if (y > 270) { doc.addPage(); y = 20; }
+      doc.text(line, 15, y);
+      y += 6;
+    });
+    y += 10;
+    doc.setDrawColor(0, 128, 0); doc.line(10, y, 200, y); y += 8;
+    doc.setFontSize(9); doc.setTextColor(100);
+    doc.text("Marijs Afwerking  |  info@marijsafwerking.nl", 105, y, { align: "center" });
+    doc.save(`Offerte_${projectName}_${now.toLocaleDateString("nl-NL").replace(/\//g,"-")}.pdf`);
+  };
+
+  renderDoc(true);
+}
