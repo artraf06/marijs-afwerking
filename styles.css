@@ -2551,3 +2551,43 @@ td.media-cell {
   display: inline-block;
 }
 .ai-pdf-btn:hover { background: #138496; }
+/* --- Drag & Drop --- */
+.mag-cat-btn.mag-cat-drop-target {
+  background: #28a745 !important;
+  color: #fff !important;
+  border-color: #90ee90 !important;
+  transform: scale(1.08);
+  box-shadow: 0 0 12px rgba(40, 167, 69, 0.6);
+  transition: all 0.15s ease;
+}
+
+tr[draggable="true"]:hover td {
+  background: #252525;
+}
+
+/* Autocomplete */
+.mag-autocomplete-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #f0f0f0;
+  cursor: pointer;
+  border-bottom: 1px solid #333;
+}
+.mag-autocomplete-item:last-child { border-bottom: none; }
+.mag-autocomplete-item:hover,
+.mag-autocomplete-item.active {
+  background: #1a3a1a;
+  color: #90ee90;
+}
+
+/* Sugestia kategorii w modalu */
+#magCatSuggestion {
+  display: none;
+  font-size: 12px;
+  color: #ffc107;
+  background: #332600;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-top: 6px;
+}
