@@ -149,8 +149,7 @@
           <div id="wbGrid" class="wb-grid"></div>
         </section>
       </div>
-
-      <!-- 🔘 Przycisk otwierający magazyn -->
+<!-- 🔘 Przycisk otwierający magazyn -->
 <div class="card" style="margin:16px 0;">
   <button id="openMagazijnBtn" onclick="magOpenSection()">🏭 Magazijnbeheer</button>
 </div>
@@ -171,8 +170,16 @@
 
   <!-- ZAKŁADKA 1: Voorraad -->
   <div id="mag-tab-voorraad" class="mag-tab-content">
-    <!-- Toolbar — dynamicznie przez magRenderToolbar() -->
     <div class="mag-toolbar" id="magVoorraadToolbar"></div>
+
+    <!-- Przycisk migracji — tylko raz, usuń po użyciu -->
+    <div id="magMigreerWrapper" style="display:none;margin-bottom:8px;">
+      <button onclick="magMigreerVerfLak()"
+              style="background:#ffc107;color:#000;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;">
+        🔄 Migreer 'Verf &amp; lak' → automatisch categoriseren
+      </button>
+    </div>
+
     <div class="mag-cat-filters" id="magCatFilters"></div>
     <div class="table-wrapper">
       <table class="mag-table">
@@ -188,15 +195,15 @@
   </div>
 
   <!-- ZAKŁADKA 2: Bewegingen -->
-<div id="mag-tab-bewegingen" class="mag-tab-content hidden">
-  <div class="mag-toolbar" style="justify-content:flex-end;">
-    <button class="mag-btn-danger" onclick="magClearOldHistory()" 
-            style="display:none;" id="magClearHistoryBtn">
-      🗑 Verwijder ouder dan 30 dagen
-    </button>
+  <div id="mag-tab-bewegingen" class="mag-tab-content hidden">
+    <div class="mag-toolbar" style="justify-content:flex-end;">
+      <button class="mag-btn-danger" onclick="magClearOldHistory()"
+              style="display:none;" id="magClearHistoryBtn">
+        🗑 Verwijder ouder dan 30 dagen
+      </button>
+    </div>
+    <div id="magHistoryList"></div>
   </div>
-  <div id="magHistoryList"></div>
-</div>
 
   <!-- ZAKŁADKA 3: Inkooplijst (tylko menedżer) -->
   <div id="mag-tab-inkoop" class="mag-tab-content hidden">
@@ -218,15 +225,20 @@
     <div class="mag-form-grid">
       <div class="mag-form-row" style="grid-column:1/-1">
         <label>Productnaam</label>
-        <input id="magFName" placeholder="bijv. Muurverf wit 10L" />
+        <input id="magFName" placeholder="bijv. Muurverf wit 10L" autocomplete="off" />
       </div>
       <div class="mag-form-row">
         <label>Categorie</label>
         <select id="magFCat">
-          <option>Verf & lak</option><option>Gereedschap</option>
-          <option>Folie & tape</option><option>Grondverf</option>
-          <option>Reinigingsmiddelen</option><option>Behang & lijm</option>
+          <option>Verf</option>
+          <option>Lak</option>
+          <option>Gereedschap</option>
+          <option>Folie &amp; tape</option>
+          <option>Grondverf</option>
+          <option>Reinigingsmiddelen</option>
+          <option>Behang &amp; lijm</option>
         </select>
+        <div id="magCatSuggestion"></div>
       </div>
       <div class="mag-form-row">
         <label>Eenheid</label>
@@ -285,7 +297,6 @@
     </div>
   </div>
 </div>
-
       <!-- ============================================================
    AI AGENT — wklej w index.html WEWNĄTRZ <section id="mainContent">
    Najlepiej tuż po przycisku magazynu
