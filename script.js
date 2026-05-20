@@ -3380,7 +3380,7 @@ if (navigator.serviceWorker) {
    ============================================================ */
 
 const MAG_CATS = [
-  "Alles","Verf","Lak","Gereedschap","Folie & tape",
+  "Alles","Saus","Lak","Gereedschap","Folie & tape",
   "Grondverf","Reinigingsmiddelen","Behang & lijm",
 ];
 
@@ -3701,11 +3701,12 @@ function magRenderAll() {
   magRenderShopList();
   const clearBtn = document.getElementById("magClearHistoryBtn");
   if (clearBtn) clearBtn.style.display = magIsManager() ? "inline-block" : "none";
-  // Pokaż przycisk migracji tylko gdy są produkty z "Verf & lak"
+  // Pokaż przyciski migracji gdy potrzebne
   const migrWrapper = document.getElementById("magMigreerWrapper");
   if (migrWrapper && magIsManager()) {
-    const hasOld = magProducts.some(p => p.cat === "Verf & lak");
-    migrWrapper.style.display = hasOld ? "block" : "none";
+    const hasVerfLak = magProducts.some(p => p.cat === "Verf & lak");
+    const hasVerf    = magProducts.some(p => p.cat === "Verf");
+    migrWrapper.style.display = (hasVerfLak || hasVerf) ? "block" : "none";
   }
 }
 
@@ -3795,7 +3796,7 @@ function magGuessCategory(name) {
       n.includes("glans") || n.includes("zijdeglans") || n.includes("hoogglans")) return "Lak";
   if (n.includes("verf") || n.includes("muurverf") || n.includes("plafond") ||
       n.includes("betonverf") || n.includes("dakverf") || n.includes("krijtverf") ||
-      n.includes("schoolbord") || n.includes("buiten") || n.includes("binnen")) return "Verf";
+      n.includes("schoolbord") || n.includes("buiten") || n.includes("binnen")) return "Saus";
   if (n.includes("grond") || n.includes("hechtgrond") || n.includes("diepgrond") ||
       n.includes("betoncontact") || n.includes("isoler")) return "Grondverf";
   if (n.includes("behang") || n.includes("vlies") || n.includes("glasvezel") ||
@@ -3810,13 +3811,13 @@ function magGuessCategory(name) {
   return null;
 }
 
-/* ─── MODAL: PRODUKT (tylko menedżer) ───────────────────── */
+/* ─── MODAL: PRODUKT ─────────────────────────────────────── */
 function magOpenAddModal() {
   if (!magIsManager()) return;
   magEditId = null;
   document.getElementById("magModalTitle").textContent = "Product toevoegen";
   document.getElementById("magFName").value = "";
-  document.getElementById("magFCat").value  = "Verf";
+  document.getElementById("magFCat").value  = "Saus";
   document.getElementById("magFUnit").value = "stuks";
   document.getElementById("magFQty").value  = "0";
   document.getElementById("magFMin").value  = "5";
@@ -3833,16 +3834,15 @@ function magOpenEditModal(docId) {
   magEditId = docId;
   document.getElementById("magModalTitle").textContent = "Product bewerken";
   document.getElementById("magFName").value = p.name || "";
-  document.getElementById("magFCat").value  = p.cat  || "Verf";
+  document.getElementById("magFCat").value  = p.cat  || "Saus";
   document.getElementById("magFUnit").value = p.unit || "stuks";
   document.getElementById("magFQty").value  = p.qty  ?? 0;
   document.getElementById("magFMin").value  = p.min  ?? 5;
   document.getElementById("magAddModal").classList.remove("hidden");
   setTimeout(magInitAutocomplete, 50);
-  // Auto-sugestia jeśli stara kategoria
   const info = document.getElementById("magCatSuggestion");
   if (info) {
-    if (p.cat === "Verf & lak") {
+    if (p.cat === "Verf & lak" || p.cat === "Verf") {
       const suggested = magGuessCategory(p.name);
       if (suggested) {
         document.getElementById("magFCat").value = suggested;
@@ -3992,7 +3992,7 @@ async function magClearOldHistory() {
   }
 }
 
-/* ─── MIGRACJA KATEGORII ─────────────────────────────────── */
+/* ─── MIGRACJA: Verf & lak → auto ───────────────────────── */
 async function magMigreerVerfLak() {
   if (!magIsManager()) return;
   if (!confirm("Automatische migratie: alle producten met 'Verf & lak' krijgen een nieuwe categorie op basis van de naam. Doorgaan?")) return;
@@ -4000,17 +4000,35 @@ async function magMigreerVerfLak() {
     const snap = await db.collection("magazijn").where("cat", "==", "Verf & lak").get();
     if (snap.empty) { alert("Geen producten gevonden met categorie 'Verf & lak'."); return; }
     const batch = db.batch();
-    let verf = 0, lak = 0, overig = 0;
+    let saus = 0, lak = 0, overig = 0;
     snap.docs.forEach(doc => {
       const naam = doc.data().name || "";
-      const nieuweCat = magGuessCategory(naam) || "Verf";
+      const nieuweCat = magGuessCategory(naam) || "Saus";
       batch.update(doc.ref, { cat: nieuweCat });
-      if (nieuweCat === "Verf") verf++;
+      if (nieuweCat === "Saus") saus++;
       else if (nieuweCat === "Lak") lak++;
       else overig++;
     });
     await batch.commit();
-    alert(`✅ Migratie klaar!\n🎨 Verf: ${verf}\n✨ Lak: ${lak}\n📦 Overig: ${overig}\n\nControleer en pas handmatig aan waar nodig.`);
+    alert(`✅ Migratie klaar!\n🎨 Saus: ${saus}\n✨ Lak: ${lak}\n📦 Overig: ${overig}`);
+    await magRefreshAll();
+  } catch (e) {
+    console.error("migratie fout:", e);
+    alert("Mislukt: " + (e?.message || e));
+  }
+}
+
+/* ─── MIGRACJA: Verf → Saus ──────────────────────────────── */
+async function magMigreerVerfNaarSaus() {
+  if (!magIsManager()) return;
+  if (!confirm("Alle producten met categorie 'Verf' worden verplaatst naar 'Saus'. Doorgaan?")) return;
+  try {
+    const snap = await db.collection("magazijn").where("cat", "==", "Verf").get();
+    if (snap.empty) { alert("Geen producten gevonden met categorie 'Verf'."); return; }
+    const batch = db.batch();
+    snap.docs.forEach(doc => batch.update(doc.ref, { cat: "Saus" }));
+    await batch.commit();
+    alert(`✅ ${snap.size} product(en) verplaatst naar 'Saus'.`);
     await magRefreshAll();
   } catch (e) {
     console.error("migratie fout:", e);

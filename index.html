@@ -165,18 +165,21 @@
   <div class="mag-metrics" id="magMetrics"></div>
   <div id="magAlert" class="mag-alert hidden"></div>
 
-  <!-- Zakładki — dynamicznie przez magRenderTabs() -->
   <div class="mag-tabs" id="magTabsBar"></div>
 
   <!-- ZAKŁADKA 1: Voorraad -->
   <div id="mag-tab-voorraad" class="mag-tab-content">
     <div class="mag-toolbar" id="magVoorraadToolbar"></div>
 
-    <!-- Przycisk migracji — tylko raz, usuń po użyciu -->
+    <!-- Migratie knoppen — verschijnen automatisch -->
     <div id="magMigreerWrapper" style="display:none;margin-bottom:8px;">
       <button onclick="magMigreerVerfLak()"
-              style="background:#ffc107;color:#000;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;">
-        🔄 Migreer 'Verf &amp; lak' → automatisch categoriseren
+              style="background:#ffc107;color:#000;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-right:8px;">
+        🔄 Migreer 'Verf &amp; lak' → automatisch
+      </button>
+      <button onclick="magMigreerVerfNaarSaus()"
+              style="background:#17a2b8;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;">
+        🔄 Migreer 'Verf' → 'Saus'
       </button>
     </div>
 
@@ -230,7 +233,7 @@
       <div class="mag-form-row">
         <label>Categorie</label>
         <select id="magFCat">
-          <option>Verf</option>
+          <option>Saus</option>
           <option>Lak</option>
           <option>Gereedschap</option>
           <option>Folie &amp; tape</option>
