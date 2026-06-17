@@ -43,12 +43,11 @@ function buildNotificationFromPayload(p) {
   const iconUrl = notif.icon || data.icon || "/logo-192.png";
   const click_action = data.click_action || data.url || "/";
 
-  // unikalny tag dla każdego projektu/powiadomienia
-  const base =
-    (data.projectId && `project-${data.projectId}`) ||
-    (data.projectName && `project-${data.projectName}`) ||
-    "project-update";
-  const tag = `${base}-${Date.now()}`;
+  // TAG OPARTY NA TREŚCI:
+  // - różne powiadomienia → różne tagi → zostają OSOBNO (user widzi wszystkie nowe)
+  // - identyczne (duplikat) → ten sam tag → drugi tylko odświeża, bez dublowania
+  const tagBron = `${data.projectName || ""}|${data.field || ""}|${body}`;
+  const tag = "marijs-" + tagBron.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
 
   return {
     title,
@@ -57,9 +56,9 @@ function buildNotificationFromPayload(p) {
       icon: iconUrl,
       badge: "/logo-192.png",
       vibrate: [300, 100, 300, 100, 300],
-      requireInteraction: true,
-      tag,
-      renotify: true,
+      requireInteraction: true,   // zostaje aż user zrobi swipe/klik
+      tag,                        // tag z treści = różne osobno, duplikaty łączone
+      renotify: true,             // dźwięk/wibracja przy każdym nowym
       data: { ...data, click_action },
     },
   };
@@ -220,7 +219,7 @@ async function broadcastBadge() {
 }
 
 /* ==== Cache ==== */
-const APP_VERSION = "v68"; // ⬅️ podbij przy deployu
+const APP_VERSION = "v69"; // ⬅️ podbij przy deployu
 const STATIC_CACHE = `marijs-static-${APP_VERSION}`;
 const DYNAMIC_CACHE = `marijs-dynamic-${APP_VERSION}`;
 

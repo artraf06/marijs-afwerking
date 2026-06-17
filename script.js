@@ -76,14 +76,21 @@ async function initMessaging() {
         const ts = Number(data.ts || data.timestamp || Date.now());
 
         // (opcjonalnie) pokaż też systemową notyfikację w foregroundzie
+        // ⭐ TAG OPARTY NA TREŚCI = różne pushe osobno, duplikaty łączone, zostają aż user zamknie
         (async () => {
           try {
             const reg = swReg || (await navigator.serviceWorker.getRegistration());
             if (reg && Notification.permission === "granted") {
+              const bodyTekst = act || msg;
+              const tagBron = `${data.projectName || ""}|${field}|${bodyTekst}`;
+              const tag = "marijs-" + tagBron.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
               await reg.showNotification(notif.title || data.title || proj, {
-                body: act,
+                body: bodyTekst,
                 icon: notif.icon || data.icon || "/logo-192.png",
                 badge: "/logo-192.png",
+                tag,                        // ⭐ tag z treści
+                renotify: true,
+                requireInteraction: true,   // zostaje aż user zamknie
                 data
               });
               reg.active?.postMessage?.({ type: "INC_BADGE" });
