@@ -102,10 +102,8 @@ function _alreadyShown(id) {
 /* ==== Background FCM ==== */
 messaging.onBackgroundMessage((payload) => {
   try {
-    // klucz deduplikacji
-    const msgId = payload?.data?.ts || payload?.data?.timestamp ||
-                  payload?.messageId || payload?.fcmMessageId || "";
-    const dedupeKey = `${payload?.data?.projectName || ""}-${payload?.data?.body || ""}-${msgId}`;
+    // klucz deduplikacji — BEZ timestampu (ten sam push = jeden raz, niezależnie kiedy dotarł)
+    const dedupeKey = `${payload?.data?.projectName || ""}-${payload?.data?.field || ""}-${payload?.data?.body || ""}`;
     if (_alreadyShown(dedupeKey)) return;
 
     const { title, options } = buildNotificationFromPayload(payload);
@@ -134,9 +132,8 @@ self.addEventListener("push", (event) => {
       d?.["firebase-messaging-msg-id"] != null
     ) return;
 
-    // deduplikacja — żeby nie dublować z onBackgroundMessage
-    const msgId = d?.ts || d?.timestamp || p?.messageId || "";
-    const dedupeKey = `${d?.projectName || ""}-${d?.body || ""}-${msgId}`;
+    // deduplikacja — żeby nie dublować z onBackgroundMessage (BEZ timestampu)
+    const dedupeKey = `${d?.projectName || ""}-${d?.field || ""}-${d?.body || ""}`;
     if (_alreadyShown(dedupeKey)) return;
 
     const shaped = {
@@ -219,7 +216,7 @@ async function broadcastBadge() {
 }
 
 /* ==== Cache ==== */
-const APP_VERSION = "v69"; // ⬅️ podbij przy deployu
+const APP_VERSION = "v70"; // ⬅️ podbij przy deployu
 const STATIC_CACHE = `marijs-static-${APP_VERSION}`;
 const DYNAMIC_CACHE = `marijs-dynamic-${APP_VERSION}`;
 
