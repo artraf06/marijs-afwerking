@@ -35,10 +35,10 @@ function buildNotificationFromPayload(p) {
   const field = data.field || "";
   const icon = iconMap[field] || "🔔";
   const proj = data.projectName || notif.title || "Project";
-  const act = data.action || notif.body || "Update";
+  const act = data.action || data.body || notif.body || "Update";
 
-  const title = notif.title || `${icon} ${proj}`;
-  const body = notif.body || `${act}${field ? " – " + field : ""}`;
+  const title = notif.title || data.title || `${icon} ${proj}`;
+  const body = notif.body || data.body || `${act}${field ? " – " + field : ""}`;
 
   const iconUrl = notif.icon || data.icon || "/logo-192.png";
   const click_action = data.click_action || data.url || "/";
@@ -85,9 +85,30 @@ async function updateBadge() {
   }
 }
 
+/* ====================================================================
+   ⚠️ ZABEZPIECZENIE PRZED PODWÓJNĄ NOTYFIKACJĄ
+   Przy data-only message FCM odpala onBackgroundMessage ORAZ push.
+   Używamy flagi z message_id żeby pokazać tylko JEDNĄ notyfikację.
+   ==================================================================== */
+const _shownMessages = new Set();
+function _alreadyShown(id) {
+  if (!id) return false;
+  if (_shownMessages.has(id)) return true;
+  _shownMessages.add(id);
+  // czyść po 60s żeby Set nie rósł w nieskończoność
+  setTimeout(() => _shownMessages.delete(id), 60000);
+  return false;
+}
+
 /* ==== Background FCM ==== */
 messaging.onBackgroundMessage((payload) => {
   try {
+    // klucz deduplikacji
+    const msgId = payload?.data?.ts || payload?.data?.timestamp ||
+                  payload?.messageId || payload?.fcmMessageId || "";
+    const dedupeKey = `${payload?.data?.projectName || ""}-${payload?.data?.body || ""}-${msgId}`;
+    if (_alreadyShown(dedupeKey)) return;
+
     const { title, options } = buildNotificationFromPayload(payload);
     const p = self.registration.showNotification(title, options);
     p.then(updateBadge);
@@ -95,7 +116,7 @@ messaging.onBackgroundMessage((payload) => {
   } catch (e) {}
 });
 
-/* ==== Ogólny handler push ==== */
+/* ==== Ogólny handler push (fallback gdy onBackgroundMessage nie zadziała) ==== */
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
@@ -104,6 +125,8 @@ self.addEventListener("push", (event) => {
     try { p = event.data.json(); } catch {}
 
     const d = p?.data || p;
+
+    // odfiltruj wewnętrzne wiadomości FCM
     if (
       p?.from === "google.com/iid" ||
       d?.["google.c.a.e"] != null ||
@@ -111,6 +134,11 @@ self.addEventListener("push", (event) => {
       d?.["google.message_id"] != null ||
       d?.["firebase-messaging-msg-id"] != null
     ) return;
+
+    // deduplikacja — żeby nie dublować z onBackgroundMessage
+    const msgId = d?.ts || d?.timestamp || p?.messageId || "";
+    const dedupeKey = `${d?.projectName || ""}-${d?.body || ""}-${msgId}`;
+    if (_alreadyShown(dedupeKey)) return;
 
     const shaped = {
       notification: p.notification || { title: p.title, body: p.body, icon: p.icon },
@@ -149,14 +177,11 @@ self.addEventListener("notificationclick", (event) => {
 
 /* ==== Zamknięcie notyfikacji (bez kliknięcia) ==== */
 self.addEventListener("notificationclose", (event) => {
-  // po zamknięciu powiadomienia odśwież licznik
   event.waitUntil(updateBadge());
 });
 
 /* ==== Licznik powiadomień (badge sync) ==== */
 let badgeCount = 0;
-
-
 
 // Odbiór komend od strony (appki)
 self.addEventListener("message", (event) => {
@@ -172,7 +197,6 @@ self.addEventListener("message", (event) => {
     badgeCount = 0;
     broadcastBadge();
   } else if (t === "REQUEST_BADGE") {
-    // Aplikacja prosi o aktualny stan
     broadcastBadge();
   } else if (t === "SKIP_WAITING") {
     self.skipWaiting();
@@ -186,19 +210,17 @@ async function broadcastBadge() {
     for (const c of clientsList) {
       c.postMessage({ type: "SET_BADGE", count: badgeCount });
     }
-    // aktualizuj też badge systemowy (jeśli dostępny)
-if (self.registration.setAppBadge) {
-  if (badgeCount > 0) await self.registration.setAppBadge(badgeCount);
-  else await self.registration.clearAppBadge?.();
-}
+    if (self.registration.setAppBadge) {
+      if (badgeCount > 0) await self.registration.setAppBadge(badgeCount);
+      else await self.registration.clearAppBadge?.();
+    }
   } catch (e) {
     console.warn("broadcastBadge error:", e);
   }
 }
 
-
 /* ==== Cache ==== */
-const APP_VERSION = "v67"; // ⬅️ podbij przy deployu
+const APP_VERSION = "v68"; // ⬅️ podbij przy deployu
 const STATIC_CACHE = `marijs-static-${APP_VERSION}`;
 const DYNAMIC_CACHE = `marijs-dynamic-${APP_VERSION}`;
 
@@ -229,14 +251,6 @@ self.addEventListener("activate", (event) => {
     }
     await self.clients.claim();
   })());
-});
-
-/* ==== Odbiór komendy z appki (auto-update) ==== */
-self.addEventListener("message", (event) => {
-  const data = event.data;
-  if (data === "SKIP_WAITING" || (data && data.type === "SKIP_WAITING")) {
-    self.skipWaiting();
-  }
 });
 
 /* ==== Fetch ==== */

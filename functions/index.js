@@ -18,12 +18,18 @@ function chunk(arr, size = 500) {
 }
 
 async function collectActiveTokens() {
-  const usersSnap = await db.collection('users').get();
   const userTokens = [];
 
-  for (const u of usersSnap.docs) {
-    const tSnap = await u.ref.collection('tokens').where('active', '==', true).get();
-    tSnap.forEach(t => userTokens.push({ token: t.id, where: { type: 'users', userRef: u.ref } }));
+  // Lista wszystkich użytkowników (na sztywno — pewne że zadziała mimo ghost documents)
+  const allUsernames = ["Sjaak", "Jos", "Jacco", "Nanda", "Pieter", "Thijs", "Hilko", "Roel", "Benji"];
+
+  for (const username of allUsernames) {
+    const userRef = db.collection('users').doc(username);
+    const tSnap = await userRef.collection('tokens').where('active', '==', true).get();
+    tSnap.forEach(t => userTokens.push({ 
+      token: t.id, 
+      where: { type: 'users', userRef } 
+    }));
   }
 
   const pushSnap = await db.collection('pushTokens').get().catch(() => ({ docs: [] }));
@@ -41,14 +47,28 @@ async function collectActiveTokens() {
 
   return tokensMeta;
 }
-
 function buildBasePayload({ title, body, projectName = '', field = '', clickAction = '/' }) {
   return {
-    notification: { title, body, icon: '/logo-192.png' },
-    data: { projectName, field, click_action: clickAction, title, body },
-    android: { priority: 'high', notification: { click_action: clickAction } },
-    webpush: { fcmOptions: { link: clickAction }, headers: { Urgency: 'high' } },
-    apns: { payload: { aps: { sound: 'default' } } },
+    // BEZ bloku notification — tylko data!
+    data: {
+      title,
+      body,
+      projectName,
+      field,
+      click_action: clickAction,
+      icon: '/logo-192.png',
+    },
+    android: { 
+      priority: 'high',
+    },
+    webpush: { 
+      headers: { Urgency: 'high', TTL: '86400' },
+      fcmOptions: { link: clickAction },
+    },
+    apns: {
+      headers: { 'apns-priority': '10' },
+      payload: { aps: { 'content-available': 1 } },
+    },
   };
 }
 

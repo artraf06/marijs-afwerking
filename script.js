@@ -3603,12 +3603,24 @@ async function magDrop(event, newCat) {
   if (!magDraggedDocId || !newCat) return;
   const p = magProducts.find(x => x.docId === magDraggedDocId);
   if (!p || p.cat === newCat) return;
+  const oudeCat = p.cat;
   try {
     await db.collection("magazijn").doc(magDraggedDocId).update({
       cat: newCat,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: currentUser || "onbekend",
     });
+
+    // 🔔 PUSH — zmiana kategorii
+    try {
+      await sendPushNotificationToAllUsers(
+        "📦 Magazijn",
+        `"${p.name}" verplaatst van ${oudeCat} naar ${newCat} door ${currentUser || "onbekend"}`,
+        "Magazijn",
+        "materialen"
+      );
+    } catch (e) { console.warn("magDrop push:", e); }
+
     magDraggedDocId = null;
     await magRefreshAll();
   } catch (e) {
@@ -3865,6 +3877,7 @@ async function magSaveProduct() {
   if (!magIsManager()) return;
   const name = (document.getElementById("magFName").value || "").trim();
   if (!name) { alert("Voer een productnaam in."); return; }
+  const isEdit = !!magEditId;
   const data = {
     name,
     cat:       document.getElementById("magFCat").value,
@@ -3875,13 +3888,33 @@ async function magSaveProduct() {
     updatedBy: currentUser || "onbekend",
   };
   try {
-    if (magEditId) {
+    if (isEdit) {
       await db.collection("magazijn").doc(magEditId).update(data);
     } else {
       data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
       data.createdBy = currentUser || "onbekend";
       await db.collection("magazijn").add(data);
     }
+
+    // 🔔 PUSH — dodanie / edycja produktu
+    try {
+      if (isEdit) {
+        await sendPushNotificationToAllUsers(
+          "📦 Magazijn",
+          `Product "${name}" bijgewerkt door ${currentUser || "onbekend"} (${data.qty} ${data.unit})`,
+          "Magazijn",
+          "materialen"
+        );
+      } else {
+        await sendPushNotificationToAllUsers(
+          "📦 Magazijn",
+          `Nieuw product "${name}" toegevoegd door ${currentUser || "onbekend"} (${data.qty} ${data.unit})`,
+          "Magazijn",
+          "materialen"
+        );
+      }
+    } catch (e) { console.warn("magSaveProduct push:", e); }
+
     magCloseModal("magAddModal");
     await magRefreshAll();
   } catch (e) {
@@ -3896,6 +3929,17 @@ async function magDeleteProduct(docId) {
   if (!confirm(`Weet je zeker dat je "${p?.name || docId}" wilt verwijderen?`)) return;
   try {
     await db.collection("magazijn").doc(docId).delete();
+
+    // 🔔 PUSH — usunięcie produktu
+    try {
+      await sendPushNotificationToAllUsers(
+        "📦 Magazijn",
+        `Product "${p?.name || "onbekend"}" verwijderd door ${currentUser || "onbekend"}`,
+        "Magazijn",
+        "materialen"
+      );
+    } catch (e) { console.warn("magDeleteProduct push:", e); }
+
     await magRefreshAll();
   } catch (e) {
     console.error("magDeleteProduct:", e);
@@ -3952,6 +3996,19 @@ async function magSaveMove() {
       user: currentUser || "onbekend",
       date: firebase.firestore.FieldValue.serverTimestamp(),
     });
+
+    // 🔔 PUSH — ruch magazynowy (przyjęcie / zużycie)
+    try {
+      const richting = type === "in" ? "ontvangen" : "verbruikt";
+      const teken     = type === "in" ? "+" : "−";
+      await sendPushNotificationToAllUsers(
+        "📦 Magazijn",
+        `${p.name}: ${teken}${qty} ${p.unit} ${richting} door ${currentUser || "onbekend"} (nu: ${newQty} ${p.unit})`,
+        "Magazijn",
+        "materialen"
+      );
+    } catch (e) { console.warn("magSaveMove push:", e); }
+
     magCloseModal("magMoveModal");
     await magRefreshAll();
     magShowTab("bewegingen");
@@ -4065,7 +4122,8 @@ function magCloseSection() {
 }
 
 /* ============================================================
-   AI BOUWASSISTENT
+   AI BOUWASSISTENT — Marijs Afwerking (UPDATED)
+   Zmiany: obsługa Excel/CSV z Bluebeam + formularz PDF
    ============================================================ */
 
 const AI_CLAUDE_URL = "https://us-central1-marijs-afwerking.cloudfunctions.net/claudeProxy";
@@ -4074,30 +4132,143 @@ let aiFiles    = [];
 let aiMessages = [];
 let aiIsTyping = false;
 
-const AI_SYSTEM_PROMPT = `Je bent een gespecialiseerde AI-assistent voor Marijs Afwerking, een Nederlands schildersbedrijf.
+const AI_SYSTEM_PROMPT = `Je bent een PROFESSIONELE CALCULATOR en AI-assistent voor Marijs Afwerking, een Nederlands schildersbedrijf. Je beantwoordt ALLE vragen over schilderwerk, behang, calculaties en technische tekeningen.
 
-Je expertise:
-- Lezen en analyseren van technische tekeningen, plattegronden en bouwkundige PDF's
-- Analyseren van foto's van ruimtes en gebouwen
-- Berekenen van oppervlakten (m²): vloer, wand, plafond
-- Tellen en catalogiseren van: ramen, deuren, kozijnen, plinten, trappen
-- Schatten van materialen: verf (liter/m²), behang (rollen), grondverf, lak
-- Opstellen van gedetailleerde offertes met arbeidskosten en materiaalprijzen
-- Advies over schildertechnieken en producten
+════════════════════════════════════════════════════════════
+PROTOCOL BIJ EXCEL/CSV DATA (Bluebeam export)
+════════════════════════════════════════════════════════════
+Als er een Excel of CSV bestand wordt aangeleverd met meetgegevens:
+1. Lees ALLE rijen en kolommen zorgvuldig
+2. Identificeer: ruimtenamen, maten, oppervlakken, lengtes
+3. Gebruik deze gegevens als EXACTE basis voor berekeningen
+4. Vermeld welke gegevens je gebruikt: "Op basis van uw Bluebeam export:"
+5. Bereken direct — geen vragen over schaal nodig bij Excel data
 
-Standaard aannames voor berekeningen:
-- Verf dekking: 10-12 m² per liter (1 laag), 6-8 m² per liter (2 lagen)
-- Muurverf: altijd 2 lagen aanbevelen
-- Lakwerk ramen/deuren: 0.5L per raam (2 zijden), 0.75L per deur
-- Kozijn: 0.3L per kozijn
-- Arbeidstijd schilderwerk: 15-20 m²/uur muurverf, 2-3 ramen/uur lakwerk
-- Uurtarief: €45-55/uur (pas aan op verzoek)
-- BTW: 21%
+════════════════════════════════════════════════════════════
+PROTOCOL BIJ TEKENINGEN EN PDF'S
+════════════════════════════════════════════════════════════
+STAP 1 — SCHAAL LEZEN:
+- Probeer ALTIJD eerst de schaal te lezen van de tekening
+- Als je de schaal kunt lezen → vermeld dit: "✅ Schaal: 1:100"
+- Als je de schaal NIET zeker kunt lezen → zeg dit DIRECT:
+  "⚠️ Ik zie een schaal op de tekening maar kan deze niet goed lezen. Het lijkt op [X] — klopt dit?"
+- Ga NOOIT berekenen zonder de schaal te bevestigen
+- Als een maat onduidelijk is: "⚠️ Deze maat lees ik als [X]m maar ik ben niet zeker — kun je dit bevestigen?"
 
-Antwoord altijd in het Nederlands.
-Wees concreet met getallen en berekeningen.
-Gebruik duidelijke tabellen voor overzichten.
-Bij een offerte: geef altijd subtotaal materialen, subtotaal arbeid, BTW en totaal.`;
+STAP 2 — BESCHRIJF ALLES WAT JE ZIET:
+- Alle ruimtes met namen
+- Alle zichtbare maten
+- Aantal ramen, deuren, kozijnen per ruimte
+- Verdiepingshoogte (standaard 2,6m als niet vermeld — vermeld dit!)
+
+════════════════════════════════════════════════════════════
+BEREKENINGEN — ALTIJD PER RUIMTE APART
+════════════════════════════════════════════════════════════
+
+WANDEN (m²):
+- Bruto = omtrek x hoogte
+- Aftrek ramen = breedte x hoogte per raam
+- Aftrek deuren = breedte x hoogte per deur
+- Netto wandoppervlak = bruto - aftrekken
+- Toon altijd de formule: bijv. "(4,5 + 3,2) x 2 x 2,6m = 40,1 m²"
+
+PLAFOND (m²):
+- Lengte x breedte
+- Rond altijd af naar boven
+
+VLOER (m²):
+- Lengte x breedte
+
+STREKKENDE METERS (m¹):
+- Plinten = omtrek kamer - deuropeningen (onderkant)
+- Kozijnen ramen = (2x hoogte + breedte) per raam x aantal
+- Kozijnen deuren = (2x hoogte + breedte) per deur x aantal
+- Dakranden/windveren buiten = meten langs de rand
+
+════════════════════════════════════════════════════════════
+AANTAL LAGEN — VRAAG ALTIJD!
+════════════════════════════════════════════════════════════
+Als niet opgegeven, vraag dan:
+- Wanden: 1 of 2 lagen?
+- Plafond: 1 of 2 lagen?
+- Houtwerk: grondverf + hoeveel lagen lak?
+- Deuren: 1 zijde of 2 zijden?
+- Buiten: extra laag vanwege weersinvloeden?
+
+════════════════════════════════════════════════════════════
+MATERIAALBEREKENING
+════════════════════════════════════════════════════════════
+
+MUURVERF / PLAFONDVERF:
+- 1 laag: 10 m² per liter (veilig rekenen)
+- 2 lagen: 6 m² per liter (veilig rekenen)
+- Altijd 10% extra voor verspilling
+
+GRONDVERF (muren/gips nieuw):
+- 1 laag grondverf voor muurverf: 8 m² per liter
+
+LAK HOUTWERK:
+- Grondverf hout: 10 m² per liter
+- Lak (1 laag): 12 m² per liter
+- Kozijn per raam (beide zijden): 0,3L grondverf + 0,5L lak per laag
+- Deur (1 zijde): 0,2L grondverf + 0,4L lak per laag
+- Deur (2 zijden): 0,4L grondverf + 0,8L lak per laag
+- Plinten: 0,15L per strekkende meter per laag
+
+BUITENSCHILDERWERK:
+- Kozijnen buiten: 2x meer verf dan binnen (weersinvloeden)
+- Gevels: zelfde als wanden maar altijd 2 lagen minimum
+- Houtwerk buiten: altijd grondverf + 2 lagen lak/verf
+
+BEHANG:
+- Standaard rol: 10m lang, 0,53m breed = 5,3 m² per rol
+- Patroon/rapport: +15% extra rollen
+- Aantal rollen = (netto wandoppervlak ÷ 5,3) x 1,15, afgerond naar boven
+- Behanglijm vlies (200g): ±25 m²
+- Behanglijm vinyl (200g): ±15 m²
+
+════════════════════════════════════════════════════════════
+ARBEIDSTIJDEN
+════════════════════════════════════════════════════════════
+- Muurverf 1 laag: 15-20 m²/uur
+- Plafond 1 laag: 10-15 m²/uur
+- Kozijnen/houtwerk lakken: 3-4 m²/uur
+- Plinten lakken: 15-20 m¹/uur
+- Behang hangen: 3-4 rollen/uur
+- Behang afhalen (oud): 5-8 m²/uur
+- Stucwerk voorbereiden: 5-8 m²/uur
+- Schilder buiten gevel: 8-12 m²/uur
+
+════════════════════════════════════════════════════════════
+OVERZICHTSTABEL — ALTIJD AAN HET EINDE
+════════════════════════════════════════════════════════════
+| Onderdeel | Ruimte | Oppervlak/Lengte | Lagen | Materiaal | Hoeveelheid | Uren |
+|-----------|--------|-----------------|-------|-----------|-------------|------|
+
+════════════════════════════════════════════════════════════
+OFFERTE OPBOUW
+════════════════════════════════════════════════════════════
+Uurtarief: €45-55/uur (vraag welk tarief als niet opgegeven)
+BTW: 21%
+
+1. Materiaallijst met prijzen
+2. Subtotaal materialen
+3. Arbeidsuren per onderdeel
+4. Subtotaal arbeid
+5. Totaal excl. BTW
+6. BTW 21%
+7. TOTAAL incl. BTW
+
+════════════════════════════════════════════════════════════
+REGELS
+════════════════════════════════════════════════════════════
+- Antwoord ALTIJD in het Nederlands
+- Beantwoord ALLE vragen over schilderwerk, materialen, technieken
+- Twijfel over schaal of maat? VRAAG EERST — reken dan pas
+- Toon ALTIJD berekeningen stap voor stap
+- Geef aan wat ZEKER is en wat een SCHATTING is
+- Reken VEILIG (liever iets meer bestellen dan tekort komen)
+- Wees eerlijk als je iets niet duidelijk kunt zien op een tekening`;
 
 function aiAgentOpen() {
   if (!magIsManager()) { alert("Alleen managers hebben toegang tot de AI assistent."); return; }
@@ -4133,16 +4304,80 @@ function aiAgentInitUI() {
   card.style.display = magIsManager() ? "block" : "none";
 }
 
+/* ─── OBSŁUGA PLIKÓW (rozszerzona o Excel/CSV) ───────────── */
 async function aiHandleFiles(fileList) {
   for (const file of Array.from(fileList)) {
-    const base64 = await aiFileToBase64(file);
-    const mediaType = file.type || "application/octet-stream";
-    const fileType = file.type.startsWith("image/") ? "image" : file.type === "application/pdf" ? "pdf" : "other";
-    aiFiles.push({ name: file.name, base64, mediaType, fileType });
+    const isExcel = file.name.endsWith(".xlsx") || file.name.endsWith(".xls");
+    const isCsv   = file.name.endsWith(".csv");
+
+    if (isExcel) {
+      // Excel — odczytaj przez SheetJS i przekonwertuj na tekst
+      const text = await aiReadExcel(file);
+      aiFiles.push({ name: file.name, text, fileType: "excel" });
+    } else if (isCsv) {
+      // CSV — odczytaj jako tekst
+      const text = await aiReadTextFile(file);
+      aiFiles.push({ name: file.name, text, fileType: "csv" });
+    } else {
+      const base64 = await aiFileToBase64(file);
+      const mediaType = file.type || "application/octet-stream";
+      const fileType = file.type.startsWith("image/") ? "image"
+                     : file.type === "application/pdf"  ? "pdf"
+                     : "other";
+      aiFiles.push({ name: file.name, base64, mediaType, fileType });
+    }
   }
   aiRenderFilePreviews();
   aiRenderInputChips();
   document.getElementById("aiFileInput").value = "";
+
+  // Pokaż formularz jeśli wgrano PDF
+  const hasPdf = aiFiles.some(f => f.fileType === "pdf");
+  if (hasPdf) aiShowPdfForm();
+
+  // Pokaż info jeśli wgrano Excel/CSV
+  const hasExcel = aiFiles.some(f => f.fileType === "excel" || f.fileType === "csv");
+  if (hasExcel) aiShowExcelInfo();
+}
+
+/* ─── ODCZYT EXCEL przez SheetJS ────────────────────────── */
+async function aiReadExcel(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        // SheetJS jest dostępny globalnie jako XLSX
+        if (typeof XLSX === "undefined") {
+          // Jeśli SheetJS nie jest załadowany — wczytaj jako tekst
+          resolve(`[Excel bestand: ${file.name} — inhoud niet leesbaar zonder SheetJS]`);
+          return;
+        }
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        let allText = `=== Bluebeam Export: ${file.name} ===\n\n`;
+        workbook.SheetNames.forEach(sheetName => {
+          allText += `--- Blad: ${sheetName} ---\n`;
+          const ws = workbook.Sheets[sheetName];
+          const csv = XLSX.utils.sheet_to_csv(ws);
+          allText += csv + "\n\n";
+        });
+        resolve(allText);
+      } catch (err) {
+        resolve(`[Fout bij lezen Excel: ${err.message}]`);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/* ─── ODCZYT CSV/TXT ─────────────────────────────────────── */
+async function aiReadTextFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsText(file, "UTF-8");
+  });
 }
 
 function aiFileToBase64(file) {
@@ -4154,33 +4389,190 @@ function aiFileToBase64(file) {
   });
 }
 
-function aiRenderFilePreviews() {
-  const el = document.getElementById("aiFilePreview");
-  if (!el) return;
-  el.innerHTML = aiFiles.map((f, i) => `
-    <div class="ai-file-chip">
-      <span>${f.fileType === "image" ? "🖼️" : f.fileType === "pdf" ? "📄" : "📎"}</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span>
-      <button onclick="aiRemoveFile(${i})" title="Verwijder">✕</button>
+/* ─── INFO PO WGRANIU EXCEL ──────────────────────────────── */
+function aiShowExcelInfo() {
+  document.getElementById("aiExcelInfoWrapper")?.remove();
+  const wrapper = document.createElement("div");
+  wrapper.id = "aiExcelInfoWrapper";
+  wrapper.style.cssText = `
+    background:#1a3a1a;border:1px solid #28a745;border-radius:8px;
+    padding:12px;margin:8px 0;font-size:13px;
+  `;
+  wrapper.innerHTML = `
+    <div style="color:#90ee90;font-weight:bold;margin-bottom:6px;">
+      ✅ Excel/CSV gedetecteerd — Bluebeam data geladen!
     </div>
-  `).join("");
+    <div style="color:#aaa;font-size:12px;margin-bottom:10px;">
+      De meetgegevens uit Bluebeam zijn ingelezen. Stel nu je vraag:
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <button onclick="aiQuickAsk('Bereken op basis van deze Bluebeam data de totale hoeveelheid verf die nodig is voor 2 lagen muurverf en geef een overzichtstabel.')"
+              style="background:#28a745;color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">
+        🎨 Verf berekenen
+      </button>
+      <button onclick="aiQuickAsk('Maak op basis van deze Bluebeam meetdata een volledige offerte met materiaalkosten en arbeidskosten inclusief BTW.')"
+              style="background:#28a745;color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">
+        📋 Offerte maken
+      </button>
+      <button onclick="aiQuickAsk('Analyseer deze Bluebeam export en geef een overzicht van alle oppervlakken, strekkende meters kozijnen, plinten en deuren.')"
+              style="background:#28a745;color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">
+        📐 Overzicht m² en m¹
+      </button>
+    </div>
+  `;
+  const inputArea = document.querySelector(".ai-chat-input-area");
+  if (inputArea) inputArea.insertAdjacentElement("beforebegin", wrapper);
 }
 
-function aiRenderInputChips() {
-  const el = document.getElementById("aiInputFileChips");
-  if (!el) return;
-  el.innerHTML = aiFiles.map((f, i) => `
-    <div class="ai-input-chip">
-      <span>${f.fileType === "image" ? "🖼️" : "📄"} ${f.name}</span>
-      <button onclick="aiRemoveFile(${i})">✕</button>
+/* ─── FORMULARZ DLA PDF ──────────────────────────────────── */
+function aiShowPdfForm() {
+  document.getElementById("aiPdfFormWrapper")?.remove();
+  const wrapper = document.createElement("div");
+  wrapper.id = "aiPdfFormWrapper";
+  wrapper.style.cssText = `
+    background:#1a2a3a;border:1px solid #17a2b8;border-radius:8px;
+    padding:14px;margin:8px 0;font-size:13px;
+  `;
+  wrapper.innerHTML = `
+    <div style="color:#17a2b8;font-weight:bold;margin-bottom:10px;">
+      📐 Technische tekening — vul 3 gegevens in voor nauwkeurige berekening:
     </div>
-  `).join("");
+    <div style="color:#aaa;font-size:11px;margin-bottom:10px;">
+      💡 Tip: Als Jacco de maten al heeft gemeten in Bluebeam, exporteer dan naar Excel — dat geeft de meest nauwkeurige resultaten.
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div>
+        <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Schaal tekening</label>
+        <select id="aiPdfSchaal" style="width:100%;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:5px;">
+          <option value="">Kies schaal...</option>
+          <option value="1:50">1:50</option>
+          <option value="1:100">1:100</option>
+          <option value="1:200">1:200</option>
+          <option value="1:500">1:500</option>
+          <option value="onbekend">Onbekend</option>
+        </select>
+      </div>
+      <div>
+        <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Verdiepingshoogte</label>
+        <select id="aiPdfHoogte" style="width:100%;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:5px;">
+          <option value="2.4m">2,4m</option>
+          <option value="2.6m" selected>2,6m (standaard)</option>
+          <option value="2.8m">2,8m</option>
+          <option value="3.0m">3,0m</option>
+          <option value="3.2m">3,2m</option>
+        </select>
+      </div>
+      <div>
+        <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Wat wordt geschilderd?</label>
+        <select id="aiPdfWat" style="width:100%;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:5px;">
+          <option value="binnen">Binnenschilderwerk</option>
+          <option value="buiten">Buitenschilderwerk</option>
+          <option value="alles">Binnen + buiten</option>
+          <option value="behang">Behangen</option>
+          <option value="binnen+behang">Schilderen + behangen</option>
+        </select>
+      </div>
+      <div>
+        <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Aantal lagen</label>
+        <select id="aiPdfLagen" style="width:100%;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:5px;">
+          <option value="1 laag muurverf">1 laag muurverf</option>
+          <option value="2 lagen muurverf" selected>2 lagen muurverf</option>
+          <option value="grondverf + 2 lagen lak">Grondverf + 2 lagen lak</option>
+          <option value="overleg">Bespreken per onderdeel</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Extra opmerkingen (optioneel)</label>
+      <input id="aiPdfOpmerking" placeholder="bijv. garage niet meenemen, alleen woonkamer..."
+             style="width:100%;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:5px;box-sizing:border-box;font-size:12px;" />
+    </div>
+    <button onclick="aiStartPdfCalculatie()"
+            style="background:#17a2b8;color:#fff;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:bold;width:100%;">
+      🧮 Analyseer tekening en bereken alles
+    </button>
+  `;
+  const inputArea = document.querySelector(".ai-chat-input-area");
+  if (inputArea) inputArea.insertAdjacentElement("beforebegin", wrapper);
+}
+
+function aiStartPdfCalculatie() {
+  const schaal    = document.getElementById("aiPdfSchaal")?.value || "onbekend";
+  const hoogte    = document.getElementById("aiPdfHoogte")?.value || "2.6m";
+  const wat       = document.getElementById("aiPdfWat")?.value || "binnen";
+  const lagen     = document.getElementById("aiPdfLagen")?.value || "2 lagen muurverf";
+  const opmerking = document.getElementById("aiPdfOpmerking")?.value || "";
+
+  const watTekst = {
+    "binnen":        "binnenschilderwerk",
+    "buiten":        "buitenschilderwerk",
+    "alles":         "binnen- én buitenschilderwerk",
+    "behang":        "behangwerk",
+    "binnen+behang": "binnenschilderwerk én behangwerk",
+  }[wat] || wat;
+
+  const vraag = `Analyseer deze technische tekening volledig.
+
+PROJECTGEGEVENS:
+- Schaal: ${schaal}
+- Verdiepingshoogte: ${hoogte}
+- Werkzaamheden: ${watTekst}
+- Aantal lagen: ${lagen}
+${opmerking ? "- Extra: " + opmerking : ""}
+
+Doe het volgende STAP VOOR STAP:
+1. Bevestig de schaal die je ziet op de tekening
+2. Beschrijf alle ruimtes die je ziet
+3. Lees alle maten — meld welke je zeker weet en welke je schat
+4. Bereken per ruimte: wanden m², plafond m², vloer m², plinten m¹, kozijnen m¹
+5. Bereken totalen
+6. Bereken benodigde hoeveelheden materialen
+7. Geef een overzichtstabel`;
+
+  document.getElementById("aiPdfFormWrapper")?.remove();
+  document.getElementById("aiChatInput").value = vraag;
+  aiSendMessage();
 }
 
 function aiRemoveFile(index) {
   aiFiles.splice(index, 1);
   aiRenderFilePreviews();
   aiRenderInputChips();
+}
+
+function aiRenderFilePreviews() {
+  const el = document.getElementById("aiFilePreview");
+  if (!el) return;
+  el.innerHTML = aiFiles.map((f, i) => {
+    const icon = f.fileType === "image" ? "🖼️"
+               : f.fileType === "pdf"   ? "📄"
+               : f.fileType === "excel" ? "📊"
+               : f.fileType === "csv"   ? "📊"
+               : "📎";
+    return `
+      <div class="ai-file-chip">
+        <span>${icon}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span>
+        <button onclick="aiRemoveFile(${i})" title="Verwijder">✕</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function aiRenderInputChips() {
+  const el = document.getElementById("aiInputFileChips");
+  if (!el) return;
+  el.innerHTML = aiFiles.map((f, i) => {
+    const icon = f.fileType === "image" ? "🖼️"
+               : f.fileType === "excel" || f.fileType === "csv" ? "📊"
+               : "📄";
+    return `
+      <div class="ai-input-chip">
+        <span>${icon} ${f.name}</span>
+        <button onclick="aiRemoveFile(${i})">✕</button>
+      </div>
+    `;
+  }).join("");
 }
 
 function aiQuickAsk(question) {
@@ -4209,12 +4601,16 @@ async function aiSendMessage() {
   const fullText = projContext ? `[${projContext}]\n\n${text}` : text;
   aiAddMessage("user", text, aiFiles.map(f => f.name));
 
+  // Zbuduj content — obsługa Excel/CSV jako tekst
   const userContent = [];
   for (const f of aiFiles) {
     if (f.fileType === "image") {
       userContent.push({ type: "image", source: { type: "base64", media_type: f.mediaType, data: f.base64 } });
     } else if (f.fileType === "pdf") {
       userContent.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: f.base64 } });
+    } else if (f.fileType === "excel" || f.fileType === "csv") {
+      // Excel/CSV jako tekst — AI odczyta wszystkie dane idealnie
+      userContent.push({ type: "text", text: `[BLUEBEAM EXPORT — ${f.name}]\n${f.text}` });
     }
   }
   userContent.push({ type: "text", text: fullText });
@@ -4224,6 +4620,9 @@ async function aiSendMessage() {
   aiFiles = [];
   aiRenderFilePreviews();
   aiRenderInputChips();
+  // Usuń formularze po wysłaniu
+  document.getElementById("aiPdfFormWrapper")?.remove();
+  document.getElementById("aiExcelInfoWrapper")?.remove();
 
   aiIsTyping = true;
   const typingId = aiAddTyping();
@@ -4232,7 +4631,11 @@ async function aiSendMessage() {
     const response = await fetch(AI_CLAUDE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ system: AI_SYSTEM_PROMPT, messages: aiMessages, max_tokens: 2000 })
+      body: JSON.stringify({
+        system: AI_SYSTEM_PROMPT,
+        messages: aiMessages,
+        max_tokens: 4000
+      })
     });
     const data = await response.json();
     aiRemoveTyping(typingId);
